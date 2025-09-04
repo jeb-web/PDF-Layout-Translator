@@ -77,7 +77,7 @@ class MainWindow:
         
         required_fonts = [font['name'] for font in analysis_data.get('fonts_used', [])]
         
-        # --- MODIFICATION : Ne vérifier que les polices pour lesquelles l'utilisateur n'a pas déjà fait de choix ---
+        # Ne vérifier que les polices pour lesquelles l'utilisateur n'a pas déjà fait de choix
         fonts_to_check = [font for font in required_fonts if font not in self.font_manager.font_mappings]
         font_report = self.font_manager.check_fonts_availability(fonts_to_check)
 
@@ -88,21 +88,7 @@ class MainWindow:
         
         self._update_global_progress(2, "Analyse terminée, polices validées")
         self.continue_to_translation_button.config(state='normal')
-        """Ce qui se passe après une analyse réussie, y compris la validation des polices."""
-        self._display_analysis_results(analysis_data)
-        
-        # --- NOUVELLE LOGIQUE : Vérification des polices ---
-        required_fonts = [font['name'] for font in analysis_data.get('fonts_used', [])]
-        font_report = self.font_manager.check_fonts_availability(required_fonts)
 
-        if not font_report['all_available']:
-            self.logger.info(f"Polices manquantes détectées: {font_report['missing_fonts']}")
-            font_dialog = FontDialog(self.root, self.font_manager, font_report)
-            font_dialog.show() # Attend que l'utilisateur ait fait ses choix
-        
-        self._update_global_progress(2, "Analyse terminée, polices validées")
-        self.continue_to_translation_button.config(state='normal') 
-        
     def _create_widgets(self):
         main_frame = ttk.Frame(self.root)
         main_frame.pack(fill='both', expand=True, padx=10, pady=10)
