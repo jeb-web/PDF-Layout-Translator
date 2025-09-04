@@ -14,6 +14,7 @@ from pathlib import Path
 from typing import Dict, List, Any, Optional, Tuple
 from dataclasses import dataclass
 from enum import Enum
+from datetime import datetime  # <-- FIX 1: Importation ajoutée
 import fitz  # PyMuPDF
 
 class ContentType(Enum):
@@ -105,7 +106,8 @@ class PDFAnalyzer:
                 'fonts_used': self._analyze_fonts(),
                 'layout_info': self._analyze_layout(),
                 'metadata': self._extract_metadata(),
-                'analysis_timestamp': fitz.get_current_time()
+                # --- FIX 2: Remplacement de fitz.get_current_time() ---
+                'analysis_timestamp': datetime.now().isoformat()
             }
             
             # Statistiques
@@ -127,7 +129,6 @@ class PDFAnalyzer:
         """Analyse les informations générales du document"""
         return {
             'page_count': len(self.doc),
-            # --- FIX: Replaced self.doc.pdf_version() with metadata lookup ---
             'pdf_version': self.doc.metadata.get('format', 'Inconnue'),
             'is_pdf_a': self.doc.is_pdf,
             'needs_password': self.doc.needs_pass,
