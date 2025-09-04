@@ -709,18 +709,8 @@ class MainWindow:
             self.open_output_folder_button.config(state='normal')
             self._output_folder = path.parent
         else:
-            error_message = f"ÉCHEC DE L'EXPORTATION.\n\nErreur : {result.errors[0]}"
+            error_message = f"ÉCHEC DE L'EXPORTATION.\n\nErreur : {', '.join(result.errors)}"
             self._update_text_widget(self.export_results_text, error_message)
-        message = "Export réussi!" if result.success else "Export échoué."
-        
-        self._update_text_widget(self.export_results_text, f"{message}\nFichier: {output_path}")
-        
-        if result.success:
-            self.open_output_folder_button.config(state='normal')
-            self.new_project_button.config(state='normal')
-            self._output_folder = output_path.parent
-            
-            messagebox.showinfo("Export", "PDF exporté avec succès !")
     
     def _open_output_folder(self):
         if hasattr(self, '_output_folder'):
