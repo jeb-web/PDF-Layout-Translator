@@ -12,7 +12,7 @@ import os
 import logging
 import platform
 from pathlib import Path
-from typing import Dict, List, Any, Optional, Tuple  # <-- FIX: Ajout de l'importation manquante
+from typing import Dict, List, Any, Optional, Tuple
 from dataclasses import dataclass, field
 from fontTools.ttLib import TTFont, TTLibError
 import json
@@ -50,15 +50,11 @@ class FontManager:
         self.logger.info(f"FontManager initialisé: {len(self.font_families)} familles de polices trouvées.")
 
     def _scan_system_fonts(self):
-        """Scanne les polices système de manière exhaustive."""
-        self.logger.info("Scanning exhaustif des polices système...")
         if platform.system() == "Windows":
             self._scan_fonts_from_registry()
         self._scan_fonts_from_folders()
 
     def _scan_fonts_from_registry(self):
-        """Méthode Windows: lit les polices depuis le registre pour une fiabilité maximale."""
-        self.logger.debug("Scan des polices depuis le registre Windows...")
         font_dir = Path(os.environ.get('WINDIR', 'C:\\Windows')) / 'Fonts'
         try:
             with winreg.OpenKey(winreg.HKEY_LOCAL_MACHINE, r"SOFTWARE\Microsoft\Windows NT\CurrentVersion\Fonts") as key:
@@ -71,14 +67,11 @@ class FontManager:
                             self._process_font_file(font_path)
                             self._scanned_files.add(font_path)
                         i += 1
-                    except OSError:
-                        break
+                    except OSError: break
         except Exception as e:
-            self.logger.error(f"Erreur d'accès au registre, le scan sera moins complet: {e}")
+            self.logger.error(f"Erreur d'accès au registre: {e}")
 
     def _scan_fonts_from_folders(self):
-        """Scanne les dossiers de polices connus."""
-        self.logger.debug("Scan des polices depuis les dossiers système...")
         font_extensions = {'.ttf', '.otf', '.ttc'}
         for font_dir in self._get_system_font_directories():
             for font_file in font_dir.rglob('*'):
@@ -106,8 +99,7 @@ class FontManager:
                     self._add_font_from_metadata(font, font_path)
             else:
                 self._add_font_from_metadata(font_collection, font_path)
-        except (TTLibError, Exception):
-            pass
+        except (TTLibError, Exception): pass
 
     def _add_font_from_metadata(self, font: TTFont, font_path: Path):
         name_table = font['name']
@@ -138,33 +130,53 @@ class FontManager:
         return {'missing_fonts': list(missing_fonts), 'suggestions': suggestions, 'all_available': not missing_fonts}
 
     def _suggest_alternatives(self, missing_font: str) -> List[Dict[str, Any]]:
-        if 'bold' in missing_font.lower() and "Arial Bold" in self.get_all_available_fonts(): return [{'font_name': "Arial Bold"}]
-        if 'italic' in missing_font.lower() and "Arial Italic" in self.get_all_available_fonts(): return [{'font_name': "Arial Italic"}]
-        if "Arial" in self.get_all_available_fonts(): return [{'font_name': "Arial"}]
-        return [{'font_name': "Helvetica"}]
-
+        # Logique de suggestion améliorée à l'avenir
+        return [{'font_name': "Arial"}]
+        
     def create_font_mapping(self, original_font: str, replacement_font_name: str):
         self.font_mappings[original_font] = FontMapping(original_font, replacement_font_name)
         self._save_font_mappings()
         self.logger.info(f"Mapping sauvegardé: '{original_font}' -> '{replacement_font_name}'")
 
     def get_replacement_font_path(self, original_font_name: str) -> Optional[Path]:
+        """
+        Trouve le chemin vers le fichier de police de remplacement en respectant le style.
+        """
+        # Priorité 1: Le choix de l'utilisateur
         if original_font_name in self.font_mappings:
             replacement_name = self.font_mappings[original_font_name].replacement_font_name
             family, style = self._split_font_name(replacement_name)
             if family in self.font_families and style in self.font_families[family].styles:
                 return self.font_families[family].styles[style].path
 
-        fallback_name = self._suggest_alternatives(original_font_name)[0]['font_name']
-        family, style = self._split_font_name(fallback_name)
-        if family in self.font_families and style in self.font_families[family].styles:
-            return self.font_families[family].styles[style].path
-        
-        return None
+        # Priorité 2: Suggestion intelligente (recherche de style)
+        original_style_hints = self._get_style_hints(original_font_name)
+        fallback_family = "Arial" if "Arial" in self.font_families else list(self.font_families.keys())[0]
+
+        if fallback_family in self.font_families:
+            family_styles = self.font_families[fallback_family].styles
+            # Essayer de trouver le style correspondant (ex: Bold Italic)
+            for style in family_styles:
+                if all(hint in style.lower() for hint in original_style_hints):
+                    return family_styles[style].path
+            # Si non trouvé, se rabattre sur le style Regular de la famille de fallback
+            if "Regular" in family_styles:
+                return family_styles["Regular"].path
+
+        return None # En dernier recours
+
+    def _get_style_hints(self, font_name: str) -> List[str]:
+        """Extrait des indices de style (bold, italic) du nom d'une police."""
+        hints = []
+        name_lower = font_name.lower()
+        if 'bold' in name_lower: hints.append('bold')
+        if 'italic' in name_lower: hints.append('italic')
+        return hints
 
     def _split_font_name(self, full_name: str) -> Tuple[str, str]:
+        """Sépare un nom de police complet en famille et style."""
         for family_name in sorted(self.font_families.keys(), key=len, reverse=True):
-            if full_name.startswith(family_name):
+            if full_name.lower().startswith(family_name.lower()):
                 style = full_name[len(family_name):].strip()
                 return family_name, style if style else "Regular"
         return full_name, "Regular"
