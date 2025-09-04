@@ -548,7 +548,7 @@ class MainWindow:
                 
             except Exception as e:
                 self.logger.error(f"Erreur analyse PDF: {e}")
-                self.root.after(0, lambda: messagebox.showerror("Erreur", f"Erreur lors de l'analyse: {e}"))
+                self.root.after(0, lambda e=e: messagebox.showerror("Erreur", f"Erreur lors de l'analyse: {e}"))
             finally:
                 self._set_processing(False)
         
@@ -1064,3 +1064,4 @@ Développé par L'OréalGPT
     def _preview_layout(self):
         """Affiche un aperçu de la mise en page"""
         messagebox.showinfo("Aperçu", "Fonctionnalité d'aperçu à implémenter")
+
