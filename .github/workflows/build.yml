@@ -47,19 +47,14 @@ jobs:
 
         if [[ $GITHUB_REF == refs/tags/v* ]]; then
             # Case 1: A proper release tag. Use it directly.
-            # Example GITHUB_REF: refs/tags/v1.2.3 -> VERSION: 1.2.3
             VERSION=${GITHUB_REF#refs/tags/v}
         elif [[ "$GIT_DESCRIBE" == *"-"* && "$GIT_DESCRIBE" == *"g"* ]]; then
             # Case 2: A git describe output with a tag, commit count, and hash.
-            # Example: v1.0.0-5-g0dd4923
-            # Convert to PEP 440 compliant version: 1.0.0.post5+g0dd4923
             VERSION_NO_V=${GIT_DESCRIBE#v}
             IFS='-' read -ra PARTS <<< "$VERSION_NO_V"
             VERSION="${PARTS[0]}.post${PARTS[1]}+${PARTS[2]}"
         else
             # Case 3: No tags, git describe returns only the hash.
-            # Create a compliant dev version.
-            # Example GIT_DESCRIBE: 0dd4923 -> VERSION: 0.0.1.dev0+g0dd4923
             HASH=${GIT_DESCRIBE}
             VERSION="0.0.1.dev0+g${HASH}"
         fi
@@ -81,6 +76,8 @@ jobs:
       continue-on-error: true
     
     - name: Basic import test
+      env:
+        PYTHONUTF8: 1
       run: |
         python -c "import src.main; print('✅ Import successful')"
 
@@ -120,19 +117,14 @@ jobs:
 
         if [[ $GITHUB_REF == refs/tags/v* ]]; then
             # Case 1: A proper release tag. Use it directly.
-            # Example GITHUB_REF: refs/tags/v1.2.3 -> VERSION: 1.2.3
             VERSION=${GITHUB_REF#refs/tags/v}
         elif [[ "$GIT_DESCRIBE" == *"-"* && "$GIT_DESCRIBE" == *"g"* ]]; then
             # Case 2: A git describe output with a tag, commit count, and hash.
-            # Example: v1.0.0-5-g0dd4923
-            # Convert to PEP 440 compliant version: 1.0.0.post5+g0dd4923
             VERSION_NO_V=${GIT_DESCRIBE#v}
             IFS='-' read -ra PARTS <<< "$VERSION_NO_V"
             VERSION="${PARTS[0]}.post${PARTS[1]}+${PARTS[2]}"
         else
             # Case 3: No tags, git describe returns only the hash.
-            # Create a compliant dev version.
-            # Example GIT_DESCRIBE: 0dd4923 -> VERSION: 0.0.1.dev0+g0dd4923
             HASH=${GIT_DESCRIBE}
             VERSION="0.0.1.dev0+g${HASH}"
         fi
