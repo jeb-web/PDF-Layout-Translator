@@ -33,7 +33,7 @@ jobs:
         fetch-depth: 0
     
     - name: Set up Python
-      uses: actions/setup-python@v5 # Updated from v4
+      uses: actions/setup-python@v5
       with:
         python-version: ${{ env.PYTHON_VERSION }}
         cache: 'pip'
@@ -46,15 +46,12 @@ jobs:
         GIT_DESCRIBE=$(git describe --tags --always 2>/dev/null || echo "0.0.0-dev")
 
         if [[ $GITHUB_REF == refs/tags/v* ]]; then
-            # Case 1: A proper release tag. Use it directly.
             VERSION=${GITHUB_REF#refs/tags/v}
         elif [[ "$GIT_DESCRIBE" == *"-"* && "$GIT_DESCRIBE" == *"g"* ]]; then
-            # Case 2: A git describe output with a tag, commit count, and hash.
             VERSION_NO_V=${GIT_DESCRIBE#v}
             IFS='-' read -ra PARTS <<< "$VERSION_NO_V"
             VERSION="${PARTS[0]}.post${PARTS[1]}+${PARTS[2]}"
         else
-            # Case 3: No tags, git describe returns only the hash.
             HASH=${GIT_DESCRIBE}
             VERSION="0.0.1.dev0+g${HASH}"
         fi
@@ -97,17 +94,12 @@ jobs:
         fetch-depth: 0
     
     - name: Set up Python
-      uses: actions/setup-python@v5 # Updated from v4
+      uses: actions/setup-python@v5
       with:
         python-version: ${{ env.PYTHON_VERSION }}
         cache: 'pip'
-    
-    - name: Install dependencies
-      run: |
-        python -m pip install --upgrade pip
-        pip install pyinstaller
-        pip install -e .
-    
+
+    # CORRECTED ORDER: Get version and create file BEFORE installing
     - name: Get version
       id: version
       shell: bash
@@ -116,30 +108,32 @@ jobs:
         GIT_DESCRIBE=$(git describe --tags --always 2>/dev/null || echo "0.0.0-dev")
 
         if [[ $GITHUB_REF == refs/tags/v* ]]; then
-            # Case 1: A proper release tag. Use it directly.
             VERSION=${GITHUB_REF#refs/tags/v}
         elif [[ "$GIT_DESCRIBE" == *"-"* && "$GIT_DESCRIBE" == *"g"* ]]; then
-            # Case 2: A git describe output with a tag, commit count, and hash.
             VERSION_NO_V=${GIT_DESCRIBE#v}
             IFS='-' read -ra PARTS <<< "$VERSION_NO_V"
             VERSION="${PARTS[0]}.post${PARTS[1]}+${PARTS[2]}"
         else
-            # Case 3: No tags, git describe returns only the hash.
             HASH=${GIT_DESCRIBE}
             VERSION="0.0.1.dev0+g${HASH}"
         fi
         echo "version=$VERSION" >> $GITHUB_OUTPUT
         echo "📋 Version: $VERSION"
-    
+
     - name: Create version file
       run: |
         echo "__version__ = '${{ steps.version.outputs.version }}'" > src/__version__.py
-    
+
+    - name: Install dependencies
+      run: |
+        python -m pip install --upgrade pip
+        pip install pyinstaller
+        pip install -e .
+
     - name: Create PyInstaller spec file
       run: |
         echo "📝 Création du fichier spec PyInstaller..."
         
-        # Créer le contenu du fichier spec (échappé pour YAML)
         $specContent = @'
         # -*- mode: python ; coding: utf-8 -*-
         
@@ -155,43 +149,17 @@ jobs:
                 ('LICENSE', '.'),
             ],
             hiddenimports=[
-                'tkinter',
-                'tkinter.ttk',
-                'tkinter.filedialog',
-                'tkinter.messagebox',
-                'tkinter.scrolledtext',
-                'PIL._tkinter_finder',
-                'fitz',
-                'reportlab',
-                'fontTools',
-                'pathlib',
-                'json',
-                'logging',
-                'threading',
-                'tempfile',
-                'shutil',
-                'datetime',
-                'dataclasses',
-                'enum',
-                'typing',
-                'regex',
-                'chardet',
+                'tkinter', 'tkinter.ttk', 'tkinter.filedialog', 'tkinter.messagebox',
+                'tkinter.scrolledtext', 'PIL._tkinter_finder', 'fitz', 'reportlab',
+                'fontTools', 'pathlib', 'json', 'logging', 'threading', 'tempfile',
+                'shutil', 'datetime', 'dataclasses', 'enum', 'typing', 'regex', 'chardet',
             ],
             hookspath=[],
             hooksconfig={},
             runtime_hooks=[],
             excludes=[
-                'matplotlib',
-                'numpy',
-                'scipy',
-                'pandas',
-                'jupyter',
-                'IPython',
-                'pytest',
-                'sphinx',
-                'setuptools',
-                'wheel',
-                'pip',
+                'matplotlib', 'numpy', 'scipy', 'pandas', 'jupyter', 'IPython', 'pytest',
+                'sphinx', 'setuptools', 'wheel', 'pip',
             ],
             win_no_prefer_redirects=False,
             win_private_assemblies=False,
@@ -202,12 +170,7 @@ jobs:
         pyz = PYZ(a.pure, a.zipped_data, cipher=block_cipher)
         
         exe = EXE(
-            pyz,
-            a.scripts,
-            a.binaries,
-            a.zipfiles,
-            a.datas,
-            [],
+            pyz, a.scripts, a.binaries, a.zipfiles, a.datas, [],
             name='PDF-Layout-Translator',
             debug=False,
             bootloader_ignore_signals=False,
@@ -224,27 +187,20 @@ jobs:
         )
         '@
         
-        # Écrire le fichier spec
         $specContent | Out-File -FilePath "single_exe.spec" -Encoding UTF8
         Write-Host "✅ Fichier spec créé"
     
     - name: Build single EXE with PyInstaller
       run: |
         echo "🔨 Construction de l'exécutable unique..."
-        
-        # Construire l'EXE
         pyinstaller --clean single_exe.spec
-        
-        # Vérifier la création
         if (Test-Path "dist\PDF-Layout-Translator.exe") {
           Write-Host "✅ EXE créé avec succès !"
           $file = Get-Item "dist\PDF-Layout-Translator.exe"
           $sizeInMB = [math]::Round($file.Length / 1MB, 2)
           Write-Host "📊 Taille: $sizeInMB MB"
-          Write-Host "📅 Date: $($file.LastWriteTime)"
         } else {
           Write-Host "❌ Échec de la création de l'EXE"
-          Get-ChildItem dist\ -ErrorAction SilentlyContinue
           exit 1
         }
     
@@ -252,8 +208,6 @@ jobs:
       run: |
         echo "🧪 Test de lancement..."
         if (Test-Path "dist\PDF-Layout-Translator.exe") {
-          Write-Host "✅ EXE trouvé et valide"
-          # Test basique de la taille (doit être > 10MB pour être valide)
           $file = Get-Item "dist\PDF-Layout-Translator.exe"
           if ($file.Length -gt 10MB) {
             Write-Host "✅ Taille EXE normale ($([math]::Round($file.Length / 1MB, 2)) MB)"
@@ -265,10 +219,8 @@ jobs:
     
     - name: Rename with version
       run: |
-        # Renommer avec la version pour clarté
         $oldName = "dist\PDF-Layout-Translator.exe"
         $newName = "dist\PDF-Layout-Translator-${{ steps.version.outputs.version }}.exe"
-        
         if (Test-Path $oldName) {
           Move-Item $oldName $newName
           Write-Host "📝 Renommé en: PDF-Layout-Translator-${{ steps.version.outputs.version }}.exe"
@@ -286,7 +238,7 @@ jobs:
         }
     
     - name: Upload EXE artifact
-      uses: actions/upload-artifact@v4 # Updated from v3
+      uses: actions/upload-artifact@v4
       with:
         name: pdf-layout-translator-exe
         path: |
@@ -294,7 +246,6 @@ jobs:
           dist/checksum.txt
         retention-days: 30
     
-    # Passer la version aux jobs suivants
     outputs:
       version: ${{ steps.version.outputs.version }}
 
@@ -312,7 +263,7 @@ jobs:
       uses: actions/checkout@v4
     
     - name: Download EXE
-      uses: actions/download-artifact@v4 # Updated from v3
+      uses: actions/download-artifact@v4
       with:
         name: pdf-layout-translator-exe
         path: release-assets/
@@ -374,7 +325,7 @@ jobs:
         echo "notes_file=RELEASE_NOTES.md" >> $env:GITHUB_OUTPUT
     
     - name: Create GitHub Release
-      uses: softprops/action-gh-release@v2 # Updated from v1
+      uses: softprops/action-gh-release@v2
       with:
         tag_name: ${{ startsWith(github.ref, 'refs/tags/') && github.ref || format('v{0}', needs.build-exe.outputs.version) }}
         name: "PDF Layout Translator v${{ needs.build-exe.outputs.version }}"
