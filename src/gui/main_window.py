@@ -16,6 +16,8 @@ from pathlib import Path
 from typing import Dict, Any, Optional
 from datetime import datetime
 import json
+import os
+import platform
 
 # Imports des modules core
 from core.session_manager import SessionManager, SessionStatus
@@ -25,7 +27,7 @@ from core.translation_parser import TranslationParser, ValidationLevel
 from utils.font_manager import FontManager
 from core.layout_processor import LayoutProcessor
 from core.pdf_reconstructor import PDFReconstructor
-from gui.font_dialog import FontDialog #
+from gui.font_dialog import FontDialog
 
 class MainWindow:
     """Fenêtre principale de l'application"""
@@ -70,23 +72,7 @@ class MainWindow:
         x = (self.root.winfo_screenwidth() // 2) - (1200 // 2)
         y = (self.root.winfo_screenheight() // 2) - (800 // 2)
         self.root.geometry(f"1200x800+{x}+{y}")
-        
-    def _post_analysis_step(self, analysis_data):
-        """Ce qui se passe après une analyse réussie, y compris la validation des polices."""
-        self._display_analysis_results(analysis_data)
-        
-        # --- NOUVELLE LOGIQUE : Vérification des polices ---
-        required_fonts = [font['name'] for font in analysis_data.get('fonts_used', [])]
-        font_report = self.font_manager.check_fonts_availability(required_fonts)
-
-        if not font_report['all_available']:
-            self.logger.info(f"Polices manquantes détectées: {font_report['missing_fonts']}")
-            font_dialog = FontDialog(self.root, self.font_manager, font_report)
-            font_dialog.show() # Attend que l'utilisateur ait fait ses choix
-        
-        self._update_global_progress(2, "Analyse terminée, polices validées")
-        self.continue_to_translation_button.config(state='normal') 
-        
+    
     def _create_widgets(self):
         main_frame = ttk.Frame(self.root)
         main_frame.pack(fill='both', expand=True, padx=10, pady=10)
@@ -127,7 +113,6 @@ class MainWindow:
         self.progress_label = ttk.Label(progress_frame, text="Prêt", style='Status.TLabel')
         self.progress_label.pack(side='right', padx=(10, 0))
 
-    # ... (les autres fonctions _create_..._tab restent identiques) ...
     def _create_home_tab(self):
         self.home_frame = ttk.Frame(self.notebook)
         self.notebook.add(self.home_frame, text="🏠 Accueil")
@@ -352,7 +337,8 @@ class MainWindow:
         
         file_menu = tk.Menu(menubar, tearoff=0)
         menubar.add_cascade(label="Fichier", menu=file_menu)
-        file_menu.add_command(label="Nouveau Projet...", command=self._browse_pdf_file)
+        file_menu.add_command(label="Nouveau Projet...", command=self._new_project)
+        file_menu.add_separator()
         file_menu.add_command(label="Quitter", command=self.root.quit)
         
         help_menu = tk.Menu(menubar, tearoff=0)
@@ -379,7 +365,6 @@ class MainWindow:
             self.logger.error(f"Erreur init: {e}")
             messagebox.showerror("Erreur", f"Erreur lors de l'initialisation: {e}")
 
-    # ... (les autres fonctions de la classe restent les mêmes) ...
     def _load_recent_sessions(self):
         if not self.session_manager:
             return
@@ -455,7 +440,6 @@ class MainWindow:
                 self.session_manager.save_analysis_data(analysis_data, self.current_session_id)
                 self.session_manager.update_session_status(SessionStatus.READY_FOR_TRANSLATION, self.current_session_id)
                 
-                # MODIFICATION : Appeler la nouvelle fonction post-analyse
                 self.root.after(0, self._post_analysis_step, analysis_data)
                 
             except Exception as e:
@@ -466,6 +450,22 @@ class MainWindow:
         
         threading.Thread(target=analyze_thread, daemon=True).start()
     
+    def _post_analysis_step(self, analysis_data):
+        self._display_analysis_results(analysis_data)
+        required_fonts = [font['name'] for font in analysis_data.get('fonts_used', [])]
+        
+        # Ne vérifier que les polices pour lesquelles l'utilisateur n'a pas déjà fait de choix
+        fonts_to_check = [font for font in required_fonts if font not in self.font_manager.font_mappings]
+        font_report = self.font_manager.check_fonts_availability(fonts_to_check)
+
+        if not font_report['all_available']:
+            self.logger.info(f"Polices manquantes détectées: {font_report['missing_fonts']}")
+            font_dialog = FontDialog(self.root, self.font_manager, font_report)
+            font_dialog.show()
+        
+        self._update_global_progress(2, "Analyse terminée, polices validées")
+        self.continue_to_translation_button.config(state='normal')
+
     def _display_analysis_results(self, analysis_data: Dict[str, Any]):
         doc_info = analysis_data['document_info']
         info_text = f"Pages: {doc_info['page_count']}\nVersion PDF: {doc_info['pdf_version']}"
@@ -495,7 +495,6 @@ class MainWindow:
                 
                 extraction_data = self.text_extractor.extract_for_translation(analysis_data)
                 
-                # --- FIX: Sauvegarder les données d'extraction ---
                 session_dir = self.session_manager.get_session_directory(self.current_session_id)
                 with open(session_dir / "extraction_data.json", 'w', encoding='utf-8') as f:
                     json.dump(extraction_data, f, indent=2, ensure_ascii=False)
@@ -520,7 +519,6 @@ class MainWindow:
             try:
                 self._set_processing(True, "Validation...")
                 
-                # --- FIX: Charger les données d'extraction correctes ---
                 session_dir = self.session_manager.get_session_directory(self.current_session_id)
                 with open(session_dir / "extraction_data.json", 'r', encoding='utf-8') as f:
                     extraction_data = json.load(f)
@@ -533,6 +531,7 @@ class MainWindow:
                     validated_translations = self.translation_parser.export_validated_translations(parse_report)
                     with open(session_dir / "validated_translations.json", 'w', encoding='utf-8') as f:
                         json.dump(validated_translations, f, indent=2)
+                    self.session_manager.update_session_status(SessionStatus.READY_FOR_LAYOUT, self.current_session_id)
                     self.root.after(0, lambda: self.continue_to_layout_button.config(state='normal'))
             except Exception as e:
                 self.logger.error(f"Erreur validation: {e}")
@@ -551,7 +550,6 @@ class MainWindow:
                 
                 session_dir = self.session_manager.get_session_directory(self.current_session_id)
                 
-                # --- FIX: Utiliser analysis_data (complet) au lieu d'extraction_data (simplifié) ---
                 with open(session_dir / "analysis_data.json", 'r', encoding='utf-8') as f:
                     analysis_data = json.load(f)
                 
@@ -575,99 +573,29 @@ class MainWindow:
                 self._set_processing(False)
         
         threading.Thread(target=layout_thread, daemon=True).start()
-
-    # ... (le reste des fonctions de la classe restent les mêmes) ...
-    def _show_export_success(self, export_dir: Path, files_created: Dict[str, Path]):
-        message = f"Export généré avec succès dans :\n{export_dir}\n\nFichiers créés:\n"
-        for file_type, file_path in files_created.items():
-            message += f"  • {file_path.name}\n"
-        
-        messagebox.showinfo("Export Généré", message)
-        self.open_export_folder_button.config(state='normal')
-        self._export_folder = export_dir
-    
-    def _open_export_folder(self):
-        if hasattr(self, '_export_folder'):
-            import os
-            import platform
-            
-            if platform.system() == 'Windows':
-                os.startfile(self._export_folder)
-            elif platform.system() == 'Darwin':
-                os.system(f'open "{self._export_folder}"')
-            else:
-                os.system(f'xdg-open "{self._export_folder}"')
-
-    def _show_validation_results(self, parse_report):
-        if parse_report.result.value == 'success':
-            icon = "✅"
-            message = "Traduction validée avec succès!"
-        elif parse_report.result.value == 'partial':
-            icon = "⚠️"
-            message = "Traduction partiellement validée."
-        else:
-            icon = "❌"
-            message = "Échec de la validation de la traduction."
-        
-        details = f"{message}\n\nÉléments traités: {parse_report.parsed_elements}/{parse_report.total_elements}"
-        
-        messagebox.showinfo(f"Validation {icon}", details)
-    
-    def _continue_to_layout(self):
-        self.notebook.select(3)
-        self._update_global_progress(4, "Prêt pour la mise en page")
-
-    def _display_layout_results(self, layout_result: Dict[str, Any]):
-        quality = layout_result['quality_metrics']
-        
-        results_text = f"Qualité globale: {quality['overall_quality']:.2f} ({quality['quality_level']})"
-        
-        self._update_text_widget(self.layout_results_text, results_text)
-        
-        self.preview_layout_button.config(state='normal')
-        self.continue_to_export_button.config(state='normal')
-    
-    def _continue_to_export(self):
-        self.notebook.select(4)
-        self._update_global_progress(5, "Prêt pour l'export")
-        
-        if self.current_session_id:
-            session_info = self.session_manager.get_session_info(self.current_session_id)
-            if session_info:
-                base_name = Path(session_info.original_pdf_name).stem
-                suggested_name = f"{base_name}_traduit.pdf"
-                self.output_filename_var.set(suggested_name)
     
     def _export_pdf(self):
         output_filename = self.output_filename_var.get().strip()
-        if not output_filename:
-            return
+        if not output_filename: return
         
         def export_thread():
             try:
                 self._set_processing(True, "Export en cours...")
                 
-                session_info = self.session_manager.get_session_info(self.current_session_id)
-                session_dir = self.session_manager.get_session_directory(self.current_session_id)
+                s_info = self.session_manager.get_session_info(self.current_session_id)
+                s_dir = self.session_manager.get_session_directory(self.current_session_id)
                 
-                original_pdf_path = Path(session_info.original_pdf_path)
-                output_pdf_path = original_pdf_path.parent / output_filename
+                pdf_path = Path(s_info.original_pdf_path)
+                out_path = pdf_path.parent / output_filename
                 
-                with open(session_dir / "layout_result.json", 'r', encoding='utf-8') as f:
-                    layout_data = json.load(f)
+                with open(s_dir / "layout_result.json", 'r', encoding='utf-8') as f: layout = json.load(f)
+                with open(s_dir / "validated_translations.json", 'r', encoding='utf-8') as f: validated = json.load(f)
                 
-                with open(session_dir / "validated_translations.json", 'r', encoding='utf-8') as f:
-                    validated_translations = json.load(f)
+                result = self.pdf_reconstructor.reconstruct_pdf(pdf_path, layout, validated, out_path)
                 
-                reconstruction_result = self.pdf_reconstructor.reconstruct_pdf(
-                    original_pdf_path, layout_data, validated_translations, output_pdf_path,
-                    preserve_original=self.create_backup_var.get()
-                )
+                self.root.after(0, lambda: self._show_export_results(result, out_path))
                 
-                self.root.after(0, lambda: self._show_export_results(reconstruction_result, output_pdf_path))
-                
-                if reconstruction_result.success:
-                    self.session_manager.update_session_status(SessionStatus.COMPLETED, self.current_session_id)
+                if result.success: self.session_manager.update_session_status(SessionStatus.COMPLETED, self.current_session_id)
             except Exception as e:
                 self.logger.error(f"Erreur export: {e}")
                 self.root.after(0, lambda e=e: messagebox.showerror("Erreur", f"Erreur: {e}"))
@@ -675,148 +603,69 @@ class MainWindow:
                 self._set_processing(False)
         
         threading.Thread(target=export_thread, daemon=True).start()
-    
-    def _show_export_results(self, result, output_path: Path):
-        message = "Export réussi!" if result.success else "Export échoué."
-        
-        self._update_text_widget(self.export_results_text, f"{message}\nFichier: {output_path}")
-        
-        if result.success:
-            self.open_output_folder_button.config(state='normal')
-            self.new_project_button.config(state='normal')
-            self._output_folder = output_path.parent
-            
-            messagebox.showinfo("Export", "PDF exporté avec succès !")
-    
-    def _open_output_folder(self):
-        if hasattr(self, '_output_folder'):
-            import os
-            os.startfile(self._output_folder)
-    
-    def _new_project(self):
-        self.current_session_id = None
-        self.notebook.select(0)
-        self._update_global_progress(0, "Prêt")
-        self._reset_interface()
-        self._load_recent_sessions()
-    
-    def _update_session_info(self):
-        if self.current_session_id and self.session_manager:
-            info = self.session_manager.get_session_info(self.current_session_id)
-            if info: self.session_label.config(text=f"Session: {info.name}")
-        else:
-            self.session_label.config(text="Aucune session")
-    
-    def _update_global_progress(self, step: int, status: str):
-        self.current_step = step
-        self.global_progress['value'] = (step / 5) * 100
-        self.progress_label.config(text=status)
-    
-    def _set_processing(self, processing: bool, status: str = ""):
-        self.processing = processing
-        if processing:
-            self.processing_indicator.start()
-            if status: self.status_label.config(text=status)
-        else:
-            self.processing_indicator.stop()
-            self.status_label.config(text="Prêt")
-    
-    def _update_text_widget(self, widget, text: str):
-        widget.config(state='normal')
-        widget.delete('1.0', tk.END)
-        widget.insert('1.0', text)
-        widget.config(state='disabled')
-    
-    def _reset_interface(self):
-        self.file_path_var.set("")
-        self.translation_input.delete('1.0', tk.END)
-        self.output_filename_var.set("")
-        
-        for btn in [self.continue_to_translation_button, self.continue_to_layout_button,
-                    self.continue_to_export_button, self.preview_layout_button,
-                    self.open_export_folder_button, self.open_output_folder_button,
-                    self.new_project_button]:
-            btn.config(state='disabled')
-
-    def _open_session_dialog(self): messagebox.showinfo("Info", "Pas encore implémenté")
-    def _export_session(self): messagebox.showinfo("Info", "Pas encore implémenté")
-    def _import_session(self): messagebox.showinfo("Info", "Pas encore implémenté")
-    def _open_font_manager(self): messagebox.showinfo("Info", "Pas encore implémenté")
-    def _open_preferences(self): messagebox.showinfo("Info", "Pas encore implémenté")
-    def _show_user_guide(self): messagebox.showinfo("Info", "Pas encore implémenté")
-    
-    def _show_about(self):
-        messagebox.showinfo("À propos", "PDF Layout Translator v1.0.0\nDéveloppé par L'OréalGPT")
 
     def _open_selected_session(self):
         selection = self.sessions_tree.selection()
-        if not selection:
-            messagebox.showwarning("Attention", "Veuillez sélectionner une session.")
-            return
-        
-        item = self.sessions_tree.item(selection[0])
-        session_id = item['tags'][0] if item['tags'] else None
-        
+        if not selection: return
+        item = self.sessions_tree.item(selection[0]); session_id = item['tags'][0]
         if not (session_id and self.session_manager.load_session(session_id)):
-            messagebox.showerror("Erreur", "Impossible de charger la session.")
-            return
-
-        self.current_session_id = session_id
-        self._update_session_info()
-        messagebox.showinfo("Succès", "Session chargée ! Reprise du travail en cours...")
-
-        # --- DÉBUT DE LA LOGIQUE DE REPRISE DE SESSION ---
-        session_info = self.session_manager.get_session_info(session_id)
-        session_dir = self.session_manager.get_session_directory(session_id)
-        status = session_info.status
-
+            messagebox.showerror("Erreur", "Impossible de charger la session."); return
+        self.current_session_id = session_id; self._update_session_info(); messagebox.showinfo("Succès", "Session chargée ! Reprise du travail...")
+        session_info = self.session_manager.get_session_info(session_id); session_dir = self.session_manager.get_session_directory(session_id); status = session_info.status
         try:
-            # Recharger les données de l'analyse, car elles sont nécessaires pour toutes les étapes suivantes
             analysis_data = self.session_manager.load_analysis_data(session_id)
-            if analysis_data:
-                self._display_analysis_results(analysis_data)
+            if analysis_data: self._display_analysis_results(analysis_data)
             
-            # Aller directement au bon onglet en fonction du statut
             if status in [SessionStatus.READY_FOR_TRANSLATION, SessionStatus.TRANSLATING, SessionStatus.READY_FOR_REVIEW, SessionStatus.REVIEWING]:
-                self.notebook.select(2) # Aller à l'onglet Traduction
-                self._update_global_progress(3, "Prêt pour la traduction")
-
+                self.notebook.select(2); self._update_global_progress(3, "Prêt pour la traduction")
             elif status in [SessionStatus.READY_FOR_LAYOUT, SessionStatus.PROCESSING_LAYOUT]:
-                 self.continue_to_layout_button.config(state='normal')
-                 self.notebook.select(3) # Aller à l'onglet Mise en page
-                 self._update_global_progress(4, "Prêt pour la mise en page")
-            
+                 self.continue_to_layout_button.config(state='normal'); self.notebook.select(3); self._update_global_progress(4, "Prêt pour la mise en page")
             elif status in [SessionStatus.READY_FOR_EXPORT, SessionStatus.COMPLETED]:
                  layout_result_path = session_dir / "layout_result.json"
                  if layout_result_path.exists():
-                     with open(layout_result_path, 'r', encoding='utf-8') as f:
-                         self._display_layout_results(json.load(f))
-                 self.notebook.select(4) # Aller à l'onglet Export
-                 self._update_global_progress(5, "Prêt pour l'export")
-                 self._set_suggested_output_filename() # Suggérer le nom de fichier
-            
-            else: # Pour les statuts CREATED, ANALYZING, ou ERROR
-                self.notebook.select(1) # Aller à l'onglet Analyse par défaut
+                     with open(layout_result_path, 'r', encoding='utf-8') as f: self._display_layout_results(json.load(f))
+                 self.notebook.select(4); self._update_global_progress(5, "Prêt pour l'export"); self._set_suggested_output_filename()
+            else: self.notebook.select(1)
         except Exception as e:
-            self.logger.error(f"Erreur lors de la reprise de session: {e}")
-            messagebox.showerror("Erreur de Reprise", f"Impossible de restaurer l'état de la session: {e}")
-            self.notebook.select(0)
-        # --- FIN DE LA LOGIQUE DE REPRISE DE SESSION ---
+            self.logger.error(f"Erreur lors de la reprise de session: {e}"); messagebox.showerror("Erreur de Reprise", f"Impossible de restaurer l'état: {e}"); self.notebook.select(0)
 
+    def _set_suggested_output_filename(self):
+        if self.current_session_id:
+            s_info = self.session_manager.get_session_info(self.current_session_id)
+            if s_info: self.output_filename_var.set(f"{Path(s_info.original_pdf_name).stem}_traduit.pdf")
+
+    def _show_export_success(self, export_dir, files_created): messagebox.showinfo("Export Généré", f"Export généré avec succès dans:\n{export_dir}")
+    def _open_export_folder(self):
+        if hasattr(self, '_export_folder'):
+            if platform.system() == "Windows": os.startfile(self._export_folder)
+            else: os.system(f'open "{self._export_folder}"')
+    def _show_validation_results(self, report): messagebox.showinfo("Validation", f"{report.result.value.capitalize()}: {report.parsed_elements}/{report.total_elements} éléments traités.")
+    def _continue_to_layout(self): self.notebook.select(3); self._update_global_progress(4, "Prêt pour mise en page")
+    def _display_layout_results(self, result): self._update_text_widget(self.layout_results_text, f"Qualité: {result['quality_metrics']['quality_level']}"); self.continue_to_export_button.config(state='normal')
+    def _continue_to_export(self): self.notebook.select(4); self._update_global_progress(5, "Prêt pour l'export"); self._set_suggested_output_filename()
+    
+    def _show_export_results(self, result, path):
+        if result.success:
+            message = f"Rapport: {result.elements_processed} éléments traités, {result.elements_ignored} ignorés."
+            if result.warnings:
+                message += f"\n\nAvertissements:\n" + "\n".join(result.warnings[:3])
+            self._update_text_widget(self.export_results_text, f"{message}\nFichier: {path}")
+            self.new_project_button.config(state='normal')
+        else:
+            self._update_text_widget(self.export_results_text, f"ÉCHEC DE L'EXPORT.\nErreur: {result.errors[0]}")
+
+    def _new_project(self): self.current_session_id=None; self.notebook.select(0); self._update_global_progress(0, "Prêt"); self._reset_interface(); self._load_recent_sessions()
+    def _update_session_info(self): self.session_label.config(text=f"Session: {self.session_manager.get_session_info(self.current_session_id).name}" if self.current_session_id else "Aucune session")
+    def _update_global_progress(self, step, status): self.global_progress['value'] = (step/5)*100; self.progress_label.config(text=status)
+    def _set_processing(self, state, status=""): self.status_label.config(text=status if state else "Prêt"); self.processing_indicator.start() if state else self.processing_indicator.stop()
+    def _update_text_widget(self, widget, text): widget.config(state='normal'); widget.delete('1.0', tk.END); widget.insert('1.0', text); widget.config(state='disabled')
+    def _reset_interface(self): self.file_path_var.set(''); self.translation_input.delete('1.0', tk.END); self.output_filename_var.set(''); [btn.config(state='disabled') for btn in [self.continue_to_translation_button, self.continue_to_layout_button, self.continue_to_export_button, self.new_project_button]]
+    def _show_about(self): messagebox.showinfo("À propos", "PDF Layout Translator v1.0.0")
     def _delete_selected_session(self):
-        selection = self.sessions_tree.selection()
-        if not selection: return
-        
+        if not self.sessions_tree.selection(): return
         if messagebox.askyesno("Confirmation", "Supprimer cette session ?"):
-            item = self.sessions_tree.item(selection[0])
-            session_id = item['tags'][0]
-            
-            if session_id and self.session_manager.delete_session(session_id):
-                self._load_recent_sessions()
-            else:
-                messagebox.showerror("Erreur", "Impossible de supprimer la session.")
-
+            session_id = self.sessions_tree.item(self.sessions_tree.selection()[0])['tags'][0]
+            if self.session_manager.delete_session(session_id): self._load_recent_sessions()
+    
     def _preview_layout(self):
         messagebox.showinfo("Info", "Pas encore implémenté")
-
-
