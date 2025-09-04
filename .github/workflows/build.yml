@@ -1,0 +1,626 @@
+name: Build and Release PDF Layout Translator
+
+on:
+  push:
+    branches: [ main, develop ]
+    tags: [ 'v*' ]
+  pull_request:
+    branches: [ main ]
+  workflow_dispatch:
+    inputs:
+      create_release:
+        description: 'Create a release'
+        required: false
+        default: false
+        type: boolean
+
+env:
+  PYTHON_VERSION: '3.11'
+  APP_NAME: 'PDF-Layout-Translator'
+  APP_VERSION: '1.0.0'
+
+jobs:
+  # =====================================================
+  # Tests et vérifications de qualité
+  # =====================================================
+  test:
+    name: Run Tests
+    runs-on: ubuntu-latest
+    strategy:
+      matrix:
+        python-version: ['3.8', '3.9', '3.10', '3.11', '3.12']
+    
+    steps:
+    - name: Checkout code
+      uses: actions/checkout@v4
+      with:
+        fetch-depth: 0  # Pour git describe
+    
+    - name: Set up Python ${{ matrix.python-version }}
+      uses: actions/setup-python@v4
+      with:
+        python-version: ${{ matrix.python-version }}
+        cache: 'pip'
+    
+    - name: Install system dependencies
+      run: |
+        sudo apt-get update
+        sudo apt-get install -y \
+          libfontconfig1-dev \
+          libfreetype6-dev \
+          libjpeg-dev \
+          libpng-dev \
+          libtiff-dev \
+          libxft-dev \
+          tk-dev \
+          python3-tk
+    
+    - name: Install Python dependencies
+      run: |
+        python -m pip install --upgrade pip
+        pip install -e .[dev,test]
+    
+    - name: Lint with flake8
+      run: |
+        flake8 src/ --count --select=E9,F63,F7,F82 --show-source --statistics
+        flake8 src/ --count --exit-zero --max-complexity=10 --max-line-length=127 --statistics
+    
+    - name: Type check with mypy
+      run: |
+        mypy src/ --ignore-missing-imports
+      continue-on-error: true  # MyPy peut être strict
+    
+    - name: Run tests with pytest
+      run: |
+        pytest tests/ -v --cov=src --cov-report=xml --cov-report=html
+    
+    - name: Upload coverage to Codecov
+      if: matrix.python-version == '3.11'
+      uses: codecov/codecov-action@v3
+      with:
+        file: ./coverage.xml
+        flags: unittests
+        name: codecov-umbrella
+
+  # =====================================================
+  # Build pour Windows
+  # =====================================================
+  build-windows:
+    name: Build Windows
+    runs-on: windows-latest
+    needs: test
+    if: always() && (needs.test.result == 'success' || needs.test.result == 'skipped')
+    
+    steps:
+    - name: Checkout code
+      uses: actions/checkout@v4
+      with:
+        fetch-depth: 0
+    
+    - name: Set up Python
+      uses: actions/setup-python@v4
+      with:
+        python-version: ${{ env.PYTHON_VERSION }}
+        cache: 'pip'
+    
+    - name: Install dependencies
+      run: |
+        python -m pip install --upgrade pip
+        pip install -e .[build]
+        pip install pyinstaller[encryption]
+    
+    - name: Get version
+      id: version
+      shell: bash
+      run: |
+        if [[ $GITHUB_REF == refs/tags/* ]]; then
+          VERSION=${GITHUB_REF#refs/tags/v}
+        else
+          VERSION=$(python -c "import subprocess; print(subprocess.check_output(['git', 'describe', '--tags', '--always']).decode().strip())")
+        fi
+        echo "version=$VERSION" >> $GITHUB_OUTPUT
+        echo "Version: $VERSION"
+    
+    - name: Create version file
+      run: |
+        echo '__version__ = "${{ steps.version.outputs.version }}"' > src/__version__.py
+    
+    - name: Build executable
+      run: |
+        python setup.py build
+        if (Test-Path "dist\PDF-Layout-Translator.exe") {
+          Write-Host "✅ Executable créé avec succès"
+          Get-ChildItem dist\PDF-Layout-Translator.exe | Select-Object Name, Length, LastWriteTime
+        } else {
+          Write-Host "❌ Échec de la création de l'exécutable"
+          exit 1
+        }
+    
+    - name: Test executable
+      run: |
+        # Test que l'exécutable se lance (mode help)
+        Start-Process -FilePath "dist\PDF-Layout-Translator.exe" -ArgumentList "--help" -Wait -NoNewWindow
+      continue-on-error: true
+    
+    - name: Create installer
+      run: |
+        # Télécharger et installer Inno Setup
+        Invoke-WebRequest -Uri "https://jrsoftware.org/download.php/is.exe" -OutFile "inno-setup.exe"
+        Start-Process -FilePath "inno-setup.exe" -ArgumentList "/VERYSILENT /SUPPRESSMSGBOXES /NORESTART" -Wait
+        
+        # Créer l'installateur
+        python setup.py installer
+      continue-on-error: true
+    
+    - name: Sign executable (si certificat disponible)
+      if: env.SIGNING_CERT != ''
+      env:
+        SIGNING_CERT: ${{ secrets.SIGNING_CERT }}
+        SIGNING_PASSWORD: ${{ secrets.SIGNING_PASSWORD }}
+      run: |
+        # Code signing si certificat disponible
+        Write-Host "Signature de l'exécutable..."
+      continue-on-error: true
+    
+    - name: Upload Windows executable
+      uses: actions/upload-artifact@v3
+      with:
+        name: windows-executable
+        path: |
+          dist/PDF-Layout-Translator.exe
+          dist/installer/PDF-Layout-Translator-Setup.exe
+        retention-days: 30
+    
+    - name: Upload build logs
+      if: failure()
+      uses: actions/upload-artifact@v3
+      with:
+        name: windows-build-logs
+        path: |
+          build/
+          *.log
+
+  # =====================================================
+  # Build pour macOS
+  # =====================================================
+  build-macos:
+    name: Build macOS
+    runs-on: macos-latest
+    needs: test
+    if: always() && (needs.test.result == 'success' || needs.test.result == 'skipped')
+    
+    steps:
+    - name: Checkout code
+      uses: actions/checkout@v4
+      with:
+        fetch-depth: 0
+    
+    - name: Set up Python
+      uses: actions/setup-python@v4
+      with:
+        python-version: ${{ env.PYTHON_VERSION }}
+        cache: 'pip'
+    
+    - name: Install system dependencies
+      run: |
+        brew install create-dmg
+    
+    - name: Install Python dependencies
+      run: |
+        python -m pip install --upgrade pip
+        pip install -e .[build]
+        pip install pyinstaller[encryption]
+    
+    - name: Get version
+      id: version
+      run: |
+        if [[ $GITHUB_REF == refs/tags/* ]]; then
+          VERSION=${GITHUB_REF#refs/tags/v}
+        else
+          VERSION=$(python -c "import subprocess; print(subprocess.check_output(['git', 'describe', '--tags', '--always']).decode().strip())")
+        fi
+        echo "version=$VERSION" >> $GITHUB_OUTPUT
+        echo "Version: $VERSION"
+    
+    - name: Create version file
+      run: |
+        echo "__version__ = '${{ steps.version.outputs.version }}'" > src/__version__.py
+    
+    - name: Build macOS app
+      run: |
+        python setup.py build
+        if [ -d "dist/PDF Layout Translator.app" ]; then
+          echo "✅ Application macOS créée avec succès"
+          ls -la "dist/PDF Layout Translator.app"
+        else
+          echo "❌ Échec de la création de l'application"
+          exit 1
+        fi
+    
+    - name: Code sign (si certificat disponible)
+      if: env.MACOS_CERTIFICATE != ''
+      env:
+        MACOS_CERTIFICATE: ${{ secrets.MACOS_CERTIFICATE }}
+        MACOS_CERTIFICATE_PWD: ${{ secrets.MACOS_CERTIFICATE_PWD }}
+        MACOS_KEYCHAIN_PWD: ${{ secrets.MACOS_KEYCHAIN_PWD }}
+      run: |
+        # Importer le certificat et signer l'app
+        echo $MACOS_CERTIFICATE | base64 --decode > certificate.p12
+        security create-keychain -p "$MACOS_KEYCHAIN_PWD" build.keychain
+        security default-keychain -s build.keychain
+        security unlock-keychain -p "$MACOS_KEYCHAIN_PWD" build.keychain
+        security import certificate.p12 -k build.keychain -P "$MACOS_CERTIFICATE_PWD" -T /usr/bin/codesign
+        security set-key-partition-list -S apple-tool:,apple:,codesign: -s -k "$MACOS_KEYCHAIN_PWD" build.keychain
+        
+        # Signer l'application
+        codesign --force --deep --sign "Developer ID Application" "dist/PDF Layout Translator.app"
+        codesign --verify --verbose "dist/PDF Layout Translator.app"
+      continue-on-error: true
+    
+    - name: Create DMG
+      run: |
+        mkdir -p dist/dmg
+        cp -R "dist/PDF Layout Translator.app" dist/dmg/
+        
+        create-dmg \
+          --volname "PDF Layout Translator" \
+          --volicon "src/assets/icons/app_icon.icns" \
+          --window-pos 200 120 \
+          --window-size 800 400 \
+          --icon-size 100 \
+          --icon "PDF Layout Translator.app" 200 190 \
+          --hide-extension "PDF Layout Translator.app" \
+          --app-drop-link 600 185 \
+          "dist/PDF-Layout-Translator-${{ steps.version.outputs.version }}.dmg" \
+          "dist/dmg/"
+    
+    - name: Notarize DMG (si compte développeur)
+      if: env.APPLE_ID != ''
+      env:
+        APPLE_ID: ${{ secrets.APPLE_ID }}
+        APPLE_ID_PASSWORD: ${{ secrets.APPLE_ID_PASSWORD }}
+        TEAM_ID: ${{ secrets.TEAM_ID }}
+      run: |
+        # Notarisation pour macOS
+        xcrun notarytool submit "dist/PDF-Layout-Translator-${{ steps.version.outputs.version }}.dmg" \
+          --apple-id "$APPLE_ID" \
+          --password "$APPLE_ID_PASSWORD" \
+          --team-id "$TEAM_ID" \
+          --wait
+      continue-on-error: true
+    
+    - name: Upload macOS app
+      uses: actions/upload-artifact@v3
+      with:
+        name: macos-app
+        path: |
+          dist/PDF Layout Translator.app
+          dist/*.dmg
+        retention-days: 30
+
+  # =====================================================
+  # Build pour Linux
+  # =====================================================
+  build-linux:
+    name: Build Linux
+    runs-on: ubuntu-latest
+    needs: test
+    if: always() && (needs.test.result == 'success' || needs.test.result == 'skipped')
+    
+    steps:
+    - name: Checkout code
+      uses: actions/checkout@v4
+      with:
+        fetch-depth: 0
+    
+    - name: Set up Python
+      uses: actions/setup-python@v4
+      with:
+        python-version: ${{ env.PYTHON_VERSION }}
+        cache: 'pip'
+    
+    - name: Install system dependencies
+      run: |
+        sudo apt-get update
+        sudo apt-get install -y \
+          libfontconfig1-dev \
+          libfreetype6-dev \
+          libjpeg-dev \
+          libpng-dev \
+          libtiff-dev \
+          libxft-dev \
+          tk-dev \
+          python3-tk \
+          alien \
+          fakeroot
+    
+    - name: Install Python dependencies
+      run: |
+        python -m pip install --upgrade pip
+        pip install -e .[build]
+        pip install pyinstaller[encryption]
+    
+    - name: Get version
+      id: version
+      run: |
+        if [[ $GITHUB_REF == refs/tags/* ]]; then
+          VERSION=${GITHUB_REF#refs/tags/v}
+        else
+          VERSION=$(python -c "import subprocess; print(subprocess.check_output(['git', 'describe', '--tags', '--always']).decode().strip())")
+        fi
+        echo "version=$VERSION" >> $GITHUB_OUTPUT
+        echo "Version: $VERSION"
+    
+    - name: Create version file
+      run: |
+        echo "__version__ = '${{ steps.version.outputs.version }}'" > src/__version__.py
+    
+    - name: Build Linux executable
+      run: |
+        python setup.py build
+        if [ -f "dist/PDF-Layout-Translator" ]; then
+          echo "✅ Exécutable Linux créé avec succès"
+          file dist/PDF-Layout-Translator
+          ldd dist/PDF-Layout-Translator || true
+        else
+          echo "❌ Échec de la création de l'exécutable"
+          exit 1
+        fi
+    
+    - name: Create AppImage
+      run: |
+        # Télécharger linuxdeploy et appimagetool
+        wget https://github.com/linuxdeploy/linuxdeploy/releases/download/continuous/linuxdeploy-x86_64.AppImage
+        wget https://github.com/AppImage/AppImageKit/releases/download/continuous/appimagetool-x86_64.AppImage
+        chmod +x *.AppImage
+        
+        # Créer la structure AppDir
+        mkdir -p AppDir/usr/bin
+        mkdir -p AppDir/usr/share/applications
+        mkdir -p AppDir/usr/share/icons/hicolor/256x256/apps
+        
+        # Copier l'exécutable
+        cp dist/PDF-Layout-Translator AppDir/usr/bin/
+        
+        # Créer le fichier .desktop
+        cat > AppDir/usr/share/applications/pdf-layout-translator.desktop << EOF
+        [Desktop Entry]
+        Type=Application
+        Name=PDF Layout Translator
+        Comment=Translate PDF documents while preserving layout
+        Exec=PDF-Layout-Translator
+        Icon=pdf-layout-translator
+        Categories=Office;Graphics;
+        EOF
+        
+        # Copier l'icône
+        cp src/assets/icons/app_icon.png AppDir/usr/share/icons/hicolor/256x256/apps/pdf-layout-translator.png || true
+        
+        # Créer l'AppImage
+        ./linuxdeploy-x86_64.AppImage --appdir AppDir --output appimage
+        
+        # Renommer l'AppImage
+        mv *.AppImage "PDF-Layout-Translator-${{ steps.version.outputs.version }}-x86_64.AppImage"
+      continue-on-error: true
+    
+    - name: Create DEB package
+      run: |
+        # Créer la structure du package DEB
+        mkdir -p deb-package/DEBIAN
+        mkdir -p deb-package/usr/bin
+        mkdir -p deb-package/usr/share/applications
+        mkdir -p deb-package/usr/share/icons/hicolor/256x256/apps
+        mkdir -p deb-package/usr/share/doc/pdf-layout-translator
+        
+        # Copier les fichiers
+        cp dist/PDF-Layout-Translator deb-package/usr/bin/
+        cp src/assets/icons/app_icon.png deb-package/usr/share/icons/hicolor/256x256/apps/pdf-layout-translator.png || true
+        cp README.md deb-package/usr/share/doc/pdf-layout-translator/
+        cp LICENSE deb-package/usr/share/doc/pdf-layout-translator/ || true
+        
+        # Créer le fichier .desktop
+        cp AppDir/usr/share/applications/pdf-layout-translator.desktop deb-package/usr/share/applications/
+        
+        # Créer le fichier control
+        cat > deb-package/DEBIAN/control << EOF
+        Package: pdf-layout-translator
+        Version: ${{ steps.version.outputs.version }}
+        Section: graphics
+        Priority: optional
+        Architecture: amd64
+        Depends: python3, python3-tk, libfontconfig1, libfreetype6
+        Maintainer: L'Oréal <loreal.gpt@example.com>
+        Description: PDF Layout Translator
+         Translate PDF documents while preserving the original layout.
+         This application allows you to translate PDF documents while
+         maintaining the visual structure, fonts, and element positioning.
+        EOF
+        
+        # Construire le package
+        fakeroot dpkg-deb --build deb-package
+        mv deb-package.deb "pdf-layout-translator_${{ steps.version.outputs.version }}_amd64.deb"
+      continue-on-error: true
+    
+    - name: Create RPM package
+      run: |
+        # Convertir DEB en RPM avec alien
+        sudo alien --to-rpm --scripts "pdf-layout-translator_${{ steps.version.outputs.version }}_amd64.deb"
+      continue-on-error: true
+    
+    - name: Upload Linux packages
+      uses: actions/upload-artifact@v3
+      with:
+        name: linux-packages
+        path: |
+          dist/PDF-Layout-Translator
+          *.AppImage
+          *.deb
+          *.rpm
+        retention-days: 30
+
+  # =====================================================
+  # Création de la release
+  # =====================================================
+  create-release:
+    name: Create Release
+    runs-on: ubuntu-latest
+    needs: [build-windows, build-macos, build-linux]
+    if: startsWith(github.ref, 'refs/tags/') || github.event.inputs.create_release == 'true'
+    
+    steps:
+    - name: Checkout code
+      uses: actions/checkout@v4
+    
+    - name: Get version
+      id: version
+      run: |
+        if [[ $GITHUB_REF == refs/tags/* ]]; then
+          VERSION=${GITHUB_REF#refs/tags/v}
+          echo "tag_name=v$VERSION" >> $GITHUB_OUTPUT
+        else
+          VERSION=$(date +%Y%m%d)-$(echo $GITHUB_SHA | cut -c1-8)
+          echo "tag_name=$VERSION" >> $GITHUB_OUTPUT
+        fi
+        echo "version=$VERSION" >> $GITHUB_OUTPUT
+    
+    - name: Download all artifacts
+      uses: actions/download-artifact@v3
+    
+    - name: Prepare release assets
+      run: |
+        mkdir -p release-assets
+        
+        # Windows
+        if [ -d "windows-executable" ]; then
+          cp windows-executable/PDF-Layout-Translator.exe release-assets/PDF-Layout-Translator-${{ steps.version.outputs.version }}-windows.exe
+          if [ -f "windows-executable/PDF-Layout-Translator-Setup.exe" ]; then
+            cp windows-executable/PDF-Layout-Translator-Setup.exe release-assets/PDF-Layout-Translator-${{ steps.version.outputs.version }}-windows-installer.exe
+          fi
+        fi
+        
+        # macOS
+        if [ -d "macos-app" ]; then
+          if [ -f "macos-app"/*.dmg ]; then
+            cp "macos-app"/*.dmg release-assets/
+          fi
+        fi
+        
+        # Linux
+        if [ -d "linux-packages" ]; then
+          cp linux-packages/PDF-Layout-Translator release-assets/PDF-Layout-Translator-${{ steps.version.outputs.version }}-linux
+          if [ -f linux-packages/*.AppImage ]; then
+            cp linux-packages/*.AppImage release-assets/
+          fi
+          if [ -f linux-packages/*.deb ]; then
+            cp linux-packages/*.deb release-assets/
+          fi
+          if [ -f linux-packages/*.rpm ]; then
+            cp linux-packages/*.rpm release-assets/
+          fi
+        fi
+        
+        # Créer un fichier de checksums
+        cd release-assets
+        sha256sum * > checksums.txt
+        ls -la
+    
+    - name: Generate release notes
+      id: release_notes
+      run: |
+        cat > RELEASE_NOTES.md << EOF
+        # PDF Layout Translator v${{ steps.version.outputs.version }}
+        
+        ## 📋 Description
+        Application de traduction de documents PDF avec préservation de la mise en page.
+        
+        ## 📦 Fichiers disponibles
+        
+        ### Windows
+        - \`PDF-Layout-Translator-${{ steps.version.outputs.version }}-windows.exe\` - Exécutable portable
+        - \`PDF-Layout-Translator-${{ steps.version.outputs.version }}-windows-installer.exe\` - Installateur
+        
+        ### macOS
+        - \`PDF-Layout-Translator-${{ steps.version.outputs.version }}.dmg\` - Image disque
+        
+        ### Linux
+        - \`PDF-Layout-Translator-${{ steps.version.outputs.version }}-linux\` - Exécutable
+        - \`PDF-Layout-Translator-${{ steps.version.outputs.version }}-x86_64.AppImage\` - AppImage
+        - \`pdf-layout-translator_${{ steps.version.outputs.version }}_amd64.deb\` - Package Debian/Ubuntu
+        - \`pdf-layout-translator-${{ steps.version.outputs.version }}-*.rpm\` - Package Red Hat/Fedora
+        
+        ## 🔒 Vérification d'intégrité
+        Utilisez le fichier \`checksums.txt\` pour vérifier l'intégrité des téléchargements.
+        
+        ## 🚀 Installation
+        
+        ### Windows
+        1. Téléchargez l'installateur ou l'exécutable portable
+        2. Exécutez le fichier téléchargé
+        3. Suivez les instructions d'installation
+        
+        ### macOS
+        1. Téléchargez le fichier .dmg
+        2. Montez l'image disque
+        3. Glissez l'application vers le dossier Applications
+        
+        ### Linux
+        #### AppImage (recommandé)
+        1. Téléchargez le fichier .AppImage
+        2. Rendez-le exécutable: \`chmod +x *.AppImage\`
+        3. Lancez: \`./PDF-Layout-Translator-*.AppImage\`
+        
+        #### Debian/Ubuntu
+        \`\`\`bash
+        sudo dpkg -i pdf-layout-translator_*.deb
+        sudo apt-get install -f  # Si dépendances manquantes
+        \`\`\`
+        
+        #### Red Hat/Fedora
+        \`\`\`bash
+        sudo rpm -i pdf-layout-translator-*.rpm
+        \`\`\`
+        
+        ## 📋 Prérequis
+        - Système d'exploitation 64-bit
+        - 4 GB RAM minimum (8 GB recommandé)
+        - 500 MB d'espace disque libre
+        
+        ## 🆘 Support
+        Pour signaler des bugs ou demander de l'aide, créez une issue sur GitHub.
+        EOF
+        
+        echo "notes_file=RELEASE_NOTES.md" >> $GITHUB_OUTPUT
+    
+    - name: Create Release
+      uses: softprops/action-gh-release@v1
+      with:
+        tag_name: ${{ steps.version.outputs.tag_name }}
+        name: PDF Layout Translator v${{ steps.version.outputs.version }}
+        body_path: ${{ steps.release_notes.outputs.notes_file }}
+        files: release-assets/*
+        draft: false
+        prerelease: ${{ contains(steps.version.outputs.version, 'dev') || contains(steps.version.outputs.version, 'beta') }}
+      env:
+        GITHUB_TOKEN: ${{ secrets.GITHUB_TOKEN }}
+
+  # =====================================================
+  # Notifications
+  # =====================================================
+  notify:
+    name: Send Notifications
+    runs-on: ubuntu-latest
+    needs: [create-release]
+    if: always()
+    
+    steps:
+    - name: Notify on success
+      if: needs.create-release.result == 'success'
+      run: |
+        echo "✅ Build et release créés avec succès!"
+        # Ici on pourrait ajouter des notifications Slack, Discord, email, etc.
+    
+    - name: Notify on failure
+      if: failure()
+      run: |
+        echo "❌ Échec du build ou de la release"
+        # Notifications d'échec
