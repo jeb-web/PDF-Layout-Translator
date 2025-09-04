@@ -13,7 +13,7 @@ from tkinter import ttk, messagebox
 import logging
 
 class AutocompleteCombobox(ttk.Combobox):
-    """Une Combobox avec fonctionnalité d'auto-complétion."""
+    """Une Combobox avec fonctionnalité d'auto-complétion améliorée."""
     def set_completion_list(self, completion_list):
         self._completion_list = sorted(completion_list)
         self._hits = []
@@ -36,12 +36,14 @@ class AutocompleteCombobox(ttk.Combobox):
         
         if self._hits:
             self._hit_index = (self._hit_index + delta) % len(self._hits)
+            current_text = self.get()
             self.delete(0, tk.END)
             self.insert(0, self._hits[self._hit_index])
-            self.select_range(self.position, tk.END)
-
+            # --- FIX: Ne pas sélectionner le texte, juste placer le curseur ---
+            self.icursor(len(current_text))
+            
     def handle_keyrelease(self, event):
-        if event.keysym in ("BackSpace", "Left", "Right", "Up", "Down"):
+        if event.keysym in ("BackSpace", "Left", "Right", "Up", "Down", "Return", "KP_Enter"):
             return
         self.autocomplete()
 
@@ -52,7 +54,6 @@ class FontDialog:
         self.font_manager = font_manager
         self.report = missing_fonts_report
         self.logger = logging.getLogger(__name__)
-        
         self.user_choices = {}
         
         self.window = tk.Toplevel(parent)
@@ -70,10 +71,8 @@ class FontDialog:
     def _create_widgets(self):
         main_frame = ttk.Frame(self.window, padding="10")
         main_frame.pack(fill="both", expand=True)
-
         instructions = "Certaines polices sont manquantes. Choisissez un remplacement pour chacune."
         ttk.Label(main_frame, text=instructions, wraplength=780).pack(fill="x", pady=(0, 10))
-        
         tree_frame = ttk.Frame(main_frame)
         tree_frame.pack(fill="both", expand=True)
         
@@ -104,14 +103,13 @@ class FontDialog:
         missing_font = self.tree.item(item_id, "values")[0]
         x, y, width, height = self.tree.bbox(item_id, column)
         
-        # --- MODIFICATION: Utilisation de la Combobox avec auto-complétion ---
         combo = AutocompleteCombobox(self.tree)
         combo.set_completion_list(self.font_manager.get_all_available_fonts())
         combo.set(self.user_choices[missing_font].get())
         combo.place(x=x, y=y, width=width, height=height)
         combo.focus_set()
         
-        def on_combo_close(event):
+        def on_combo_close(event=None):
             new_value = combo.get()
             self.tree.set(item_id, "replacement", new_value)
             self.user_choices[missing_font].set(new_value)
@@ -119,6 +117,9 @@ class FontDialog:
 
         combo.bind("<<ComboboxSelected>>", on_combo_close)
         combo.bind("<FocusOut>", on_combo_close)
+        combo.bind("<Return>", on_combo_close)
+        combo.bind("<KP_Enter>", on_combo_close)
+
 
     def _on_validate(self):
         try:
