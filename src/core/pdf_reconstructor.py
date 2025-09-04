@@ -13,12 +13,10 @@ import fitz  # PyMuPDF
 from pathlib import Path
 from typing import Dict, List, Any, Optional
 from datetime import datetime
-import shutil
-from dataclasses import dataclass  # <-- FIX: Ligne d'importation ajoutée
+from dataclasses import dataclass
 
 @dataclass
 class ReconstructionResult:
-    """Résultat de la reconstruction"""
     success: bool
     output_path: Optional[Path]
     processing_time: float
@@ -28,37 +26,15 @@ class ReconstructionResult:
     warnings: List[str]
 
 class PDFReconstructor:
-    """Reconstructeur de PDF avec texte traduit"""
-    
     def __init__(self, config_manager=None, font_manager=None):
-        """
-        Initialise le reconstructeur PDF
-        
-        Args:
-            config_manager: Gestionnaire de configuration (optionnel)
-            font_manager: Gestionnaire de polices (optionnel)
-        """
         self.logger = logging.getLogger(__name__)
         self.font_manager = font_manager
 
     def reconstruct_pdf(self, original_pdf_path: Path, layout_data: Dict[str, Any],
                        validated_translations: Dict[str, Any], output_path: Path,
                        preserve_original: bool = True) -> ReconstructionResult:
-        """
-        Reconstruit le PDF avec les traductions et ajustements de mise en page
-        
-        Args:
-            original_pdf_path: Chemin vers le PDF original
-            layout_data: Données de mise en page du layout_processor
-            validated_translations: Traductions validées
-            output_path: Chemin de sortie du PDF
-            preserve_original: Créer une sauvegarde de l'original
-            
-        Returns:
-            Résultat de la reconstruction
-        """
         start_time = datetime.now()
-        self.logger.info(f"Début de la reconstruction: {original_pdf_path} -> {output_path}")
+        self.logger.info(f"Début de la reconstruction robuste: {original_pdf_path} -> {output_path}")
         
         errors, warnings = [], []
         pages_processed, elements_processed = 0, 0
@@ -67,16 +43,23 @@ class PDFReconstructor:
             original_doc = fitz.open(original_pdf_path)
             output_doc = fitz.open()
             
+            total_layouts = len(layout_data.get('element_layouts', []))
+            self.logger.info(f"Le reconstructeur a reçu {total_layouts} éléments de mise en page.")
+
             for page_num in range(len(original_doc)):
                 page_result = self._process_page(
-                    original_doc[page_num], output_doc, page_num + 1,
+                    original_doc, page_num, output_doc,
                     layout_data, validated_translations
                 )
                 pages_processed += 1
                 elements_processed += page_result['elements_processed']
                 warnings.extend(page_result['warnings'])
 
-            output_doc.save(output_path, garbage=4, deflate=True)
+            if len(output_doc) > 0:
+                output_doc.save(output_path, garbage=4, deflate=True, clean=True)
+            else:
+                warnings.append("Le document de sortie est vide, aucune page n'a été traitée.")
+
             original_doc.close()
             output_doc.close()
             
@@ -89,81 +72,92 @@ class PDFReconstructor:
             )
             
         except Exception as e:
-            self.logger.error(f"Erreur lors de la reconstruction: {e}", exc_info=True)
+            self.logger.error(f"Erreur critique lors de la reconstruction: {e}", exc_info=True)
             return ReconstructionResult(
                 success=False, output_path=None, processing_time=0,
                 pages_processed=0, elements_processed=0, errors=[str(e)], warnings=[]
             )
 
-    def _process_page(self, original_page, output_doc, page_number: int,
+    def _process_page(self, original_doc, page_num: int, output_doc,
                      layout_data: Dict[str, Any], validated_translations: Dict[str, Any]) -> Dict[str, Any]:
         
-        new_page = output_doc.new_page(width=original_page.rect.width, height=original_page.rect.height)
-        
-        # Copie des images (simplifié)
-        for img in original_page.get_images(full=True):
-            xref = img[0]
-            if xref > 0:
-                rects = original_page.get_image_rects(xref)
-                for rect in rects:
-                    try:
-                        new_page.insert_image(rect, stream=original_page.parent.extract_image(xref)["image"])
-                    except Exception as img_e:
-                        self.logger.warning(f"Impossible de copier une image sur la page {page_number}: {img_e}")
+        page_number = page_num + 1
+        self.logger.info(f"Traitement de la page {page_number}...")
 
-        elements_on_page = self._get_page_text_elements(page_number, layout_data)
+        # --- FIX: Implémentation de la méthode de reconstruction robuste ---
         
+        # 1. Copier la page originale parfaitement dans le nouveau document
+        output_doc.insert_pdf(original_doc, from_page=page_num, to_page=page_num)
+        new_page = output_doc[page_num] # Récupérer la référence à la page copiée
+
+        elements_on_page = self._get_page_text_elements(page_number, layout_data, validated_translations)
+        self.logger.info(f"Page {page_number}: {len(elements_on_page)} éléments traduits à placer.")
+
+        # 2. Effacer "chirurgicalement" l'ancien texte en utilisant la rédaction
+        for element_layout in elements_on_page:
+            original_bbox = fitz.Rect(element_layout['original_bbox'])
+            new_page.add_redact_annot(original_bbox, fill=(1,1,1)) # Remplir avec du blanc
+
+        # Appliquer toutes les rédactions sur la page en une seule fois
+        new_page.apply_redactions()
+
+        # 3. Placer le nouveau texte traduit
         for element_layout in elements_on_page:
             try:
-                self._place_translated_text(new_page, element_layout, validated_translations)
+                self._place_translated_text(new_page, element_layout)
             except Exception as e:
                 self.logger.warning(f"Erreur placement texte {element_layout.get('element_id', 'N/A')}: {e}")
 
         return {'elements_processed': len(elements_on_page), 'warnings': []}
 
-    def _get_page_text_elements(self, page_number: int, layout_data: Dict[str, Any]) -> List[Dict[str, Any]]:
-        return [
-            elem for elem in layout_data.get('element_layouts', [])
-            if elem.get('page_number') == page_number
-        ]
+    def _get_page_text_elements(self, page_number: int, layout_data: Dict[str, Any], validated_translations: Dict[str, Any]) -> List[Dict[str, Any]]:
+        layouts = {elem['element_id']: elem for elem in layout_data.get('element_layouts', [])}
+        
+        elements_on_page = []
+        for elem_id, layout_info in layouts.items():
+            if layout_info.get('page_number') == page_number and elem_id in validated_translations['translations']:
+                full_info = layout_info.copy()
+                full_info.update(validated_translations['translations'][elem_id])
+                elements_on_page.append(full_info)
+        return elements_on_page
     
-    def _place_translated_text(self, page, element_layout: Dict[str, Any], 
-                             validated_translations: Dict[str, Any]):
-        element_id = element_layout['element_id']
-        translation_data = validated_translations['translations'].get(element_id)
-        if not translation_data:
+    def _place_translated_text(self, page, element_layout: Dict[str, Any]):
+        translated_text = element_layout.get('translated_text', '')
+        if not translated_text:
             return
 
-        translated_text = translation_data['translated_text']
         bbox = element_layout['new_bbox']
         font_size = element_layout['new_font_size']
         rect = fitz.Rect(bbox)
 
         font_name = self._determine_font_for_element(element_layout)
         align = self._get_text_alignment(element_layout)
+        
+        self.logger.debug(f"Placement de '{translated_text[:30]}...' dans le rect {rect} avec police {font_name} et taille {font_size}")
 
-        page.insert_textbox(
+        rc = page.insert_textbox(
             rect,
             translated_text,
             fontsize=font_size,
             fontname=font_name,
             align=align
         )
+        if rc < 0:
+            self.logger.warning(f"Le texte pour l'élément {element_layout['element_id']} a peut-être débordé. Code retour: {rc}")
 
     def _determine_font_for_element(self, element_layout: Dict[str, Any]) -> str:
-        original_font = element_layout.get('original_font_name', 'helv')
+        original_font = element_layout.get('original_font_name', 'helv').lower()
         
-        # Logique de base pour choisir une police de base PDF
-        if 'bold' in original_font.lower():
-            return "helv-bold"
-        if 'italic' in original_font.lower():
-            return "helv-it"
-        if 'bold' in original_font.lower() and 'italic' in original_font.lower():
+        if 'bold' in original_font and ('italic' in original_font or 'oblique' in original_font):
             return "helv-boit"
-        return "helv" # Helvetica de base
+        if 'bold' in original_font:
+            return "helv-bold"
+        if 'italic' in original_font or 'oblique' in original_font:
+            return "helv-it"
+        return "helv"
 
     def _get_text_alignment(self, element_layout: Dict[str, Any]) -> int:
         content_type = element_layout.get('content_type', 'paragraph')
-        if content_type in ['title', 'subtitle']:
+        if content_type in ['title', 'subtitle', 'header', 'footer']:
             return fitz.TEXT_ALIGN_CENTER
         return fitz.TEXT_ALIGN_LEFT
