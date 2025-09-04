@@ -416,7 +416,6 @@ class MainWindow:
         status = session_info.status
 
         try:
-            # Charger les données de l'analyse, car elles sont nécessaires pour toutes les étapes suivantes
             analysis_data = self.session_manager.load_analysis_data(session_id)
             if analysis_data: self._display_analysis_results(analysis_data)
             
