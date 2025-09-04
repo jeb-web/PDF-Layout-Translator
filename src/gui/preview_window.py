@@ -308,7 +308,7 @@ class PreviewWindow:
                 
                 # Mettre à jour l'interface
                 self.window.after(0, self._update_page_info)
-                self.window.after(0, lambda: self._set_page(0))
+                self.window.after(0,lambda e=e: self._set_page(0))
                 
                 # Générer l'aperçu si possible
                 if self.layout_data and self.validated_translations:
@@ -318,7 +318,7 @@ class PreviewWindow:
                 self.logger.error(f"Erreur chargement documents: {e}")
                 self.window.after(0, lambda e=e: messagebox.showerror("Erreur", f"Erreur lors du chargement: {e}"))
             finally:
-                self.window.after(0, lambda: self._set_loading(False))
+                self.window.after(0,lambda e=e: self._set_loading(False))
         
         threading.Thread(target=load_thread, daemon=True).start()
     
@@ -354,16 +354,16 @@ class PreviewWindow:
                     
                     # Mettre à jour l'affichage
                     self.window.after(0, self._refresh_display)
-                    self.window.after(0, lambda: self.status_label.config(text="Aperçu généré avec succès"))
+                    self.window.after(0,lambda e=e: self.status_label.config(text="Aperçu généré avec succès"))
                 else:
                     error_msg = f"Erreur lors de la génération: {'; '.join(result.errors[:3])}"
-                    self.window.after(0, lambda: messagebox.showerror("Erreur", error_msg))
+                    self.window.after(0,lambda e=e: messagebox.showerror("Erreur", error_msg))
                 
             except Exception as e:
                 self.logger.error(f"Erreur génération aperçu: {e}")
                 self.window.after(0, lambda e=e: messagebox.showerror("Erreur", f"Erreur lors de la génération: {e}"))
             finally:
-                self.window.after(0, lambda: self._set_loading(False))
+                self.window.after(0,lambda e=e: self._set_loading(False))
         
         threading.Thread(target=generate_thread, daemon=True).start()
     
@@ -827,3 +827,4 @@ RACCOURCIS:
         """Définit le niveau de zoom (interface publique)"""
 
         self._set_zoom(zoom)
+
