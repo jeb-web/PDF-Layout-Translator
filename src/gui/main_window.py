@@ -628,7 +628,7 @@ DISTRIBUTION DU CONTENU:
                 
             except Exception as e:
                 self.logger.error(f"Erreur génération export: {e}")
-                self.root.after(0, lambda: messagebox.showerror("Erreur", f"Erreur lors de la génération: {e}"))
+                self.root.after(0, lambda e=e: messagebox.showerror("Erreur", f"Erreur lors de la génération: {e}"))
             finally:
                 self._set_processing(False)
         
@@ -702,7 +702,7 @@ DISTRIBUTION DU CONTENU:
                 
             except Exception as e:
                 self.logger.error(f"Erreur validation traduction: {e}")
-                self.root.after(0, lambda: messagebox.showerror("Erreur", f"Erreur lors de la validation: {e}"))
+                self.root.after(0, lambda e=e: messagebox.showerror("Erreur", f"Erreur lors de la validation: {e}"))
             finally:
                 self._set_processing(False)
         
@@ -1064,4 +1064,5 @@ Développé par L'OréalGPT
     def _preview_layout(self):
         """Affiche un aperçu de la mise en page"""
         messagebox.showinfo("Aperçu", "Fonctionnalité d'aperçu à implémenter")
+
 
