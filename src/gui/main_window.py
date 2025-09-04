@@ -624,7 +624,7 @@ DISTRIBUTION DU CONTENU:
                 files_created = self.text_extractor.create_export_package(extraction_data, export_dir)
                 
                 # Mettre à jour l'interface
-                self.root.after(0, lambda e=e: self._show_export_success(export_dir, files_created))
+                self.root.after(0, lambda: self._show_export_success(export_dir, files_created))
                 
             except Exception as e:
                 self.logger.error(f"Erreur génération export: {e}")
@@ -686,7 +686,7 @@ DISTRIBUTION DU CONTENU:
                 )
                 
                 # Afficher les résultats
-                self.root.after(0, lambda e=e: self._show_validation_results(parse_report))
+                self.root.after(0, lambda: self._show_validation_results(parse_report))
                 
                 # Si succès, sauvegarder et continuer
                 if parse_report.result.value in ['success', 'partial']:
@@ -698,7 +698,7 @@ DISTRIBUTION DU CONTENU:
                         json.dump(validated_translations, f, indent=2, ensure_ascii=False)
                     
                     self.session_manager.update_session_status(SessionStatus.READY_FOR_LAYOUT, self.current_session_id)
-                    self.root.after(0, lambda e=e: self.continue_to_layout_button.config(state='normal'))
+                    self.root.after(0, lambda: self.continue_to_layout_button.config(state='normal'))
                 
             except Exception as e:
                 self.logger.error(f"Erreur validation traduction: {e}")
@@ -763,7 +763,7 @@ Recommandations:
                     json.dump(layout_result, f, indent=2, ensure_ascii=False)
                 
                 # Mettre à jour l'interface
-                self.root.after(0, lambda e=e: self._display_layout_results(layout_result))
+                self.root.after(0, lambda: self._display_layout_results(layout_result))
                 
                 self.session_manager.update_session_status(SessionStatus.READY_FOR_EXPORT, self.current_session_id)
                 
@@ -853,7 +853,7 @@ RECOMMANDATIONS:
                     )
                 
                 # Mettre à jour l'interface
-                self.root.after(0, lambda e=e: self._show_export_results(reconstruction_result, output_pdf_path))
+                self.root.after(0, lambda: self._show_export_results(reconstruction_result, output_pdf_path))
                 
                 if reconstruction_result.success:
                     self.session_manager.update_session_status(SessionStatus.COMPLETED, self.current_session_id)
@@ -1064,6 +1064,3 @@ Développé par L'OréalGPT
     def _preview_layout(self):
         """Affiche un aperçu de la mise en page"""
         messagebox.showinfo("Aperçu", "Fonctionnalité d'aperçu à implémenter")
-
-
-
