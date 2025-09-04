@@ -18,14 +18,8 @@ import re
 
 @dataclass
 class ReconstructionResult:
-    success: bool
-    output_path: Optional[Path]
-    processing_time: float
-    pages_processed: int
-    elements_processed: int
-    elements_ignored: int # Ajout pour le rapport
-    errors: List[str]
-    warnings: List[str]
+    success: bool; output_path: Optional[Path]; processing_time: float; pages_processed: int
+    elements_processed: int; elements_ignored: int; errors: List[str]; warnings: List[str]
 
 class PDFReconstructor:
     def __init__(self, config_manager=None, font_manager=None):
@@ -36,8 +30,6 @@ class PDFReconstructor:
                        validated_translations: Dict[str, Any], output_path: Path,
                        preserve_original: bool = True) -> ReconstructionResult:
         start_time = datetime.now()
-        self.logger.info(f"Début de la reconstruction: {original_pdf_path} -> {output_path}")
-        
         errors, warnings = [], []
         pages_processed, elements_processed, elements_ignored = 0, 0, 0
         
@@ -46,10 +38,7 @@ class PDFReconstructor:
             output_doc = fitz.open()
             
             for page_num in range(len(original_doc)):
-                page_result = self._process_page(
-                    original_doc, page_num, output_doc,
-                    layout_data, validated_translations
-                )
+                page_result = self._process_page(original_doc, page_num, output_doc, layout_data, validated_translations)
                 pages_processed += 1
                 elements_processed += page_result['elements_processed']
                 elements_ignored += page_result['elements_ignored']
@@ -58,18 +47,15 @@ class PDFReconstructor:
             if len(output_doc) > 0:
                 output_doc.save(output_path, garbage=4, deflate=True, clean=True)
             else:
-                warnings.append("Le document de sortie est vide car aucune page n'a été traitée.")
+                warnings.append("Le document de sortie est vide.")
 
             original_doc.close(); output_doc.close()
             
-            processing_time = (datetime.now() - start_time).total_seconds()
-            
             return ReconstructionResult(
-                success=True, output_path=output_path, processing_time=processing_time,
+                success=True, output_path=output_path, processing_time=(datetime.now() - start_time).total_seconds(),
                 pages_processed=pages_processed, elements_processed=elements_processed,
                 elements_ignored=elements_ignored, errors=errors, warnings=warnings
             )
-            
         except Exception as e:
             self.logger.error(f"Erreur critique lors de la reconstruction: {e}", exc_info=True)
             return ReconstructionResult(
@@ -89,24 +75,19 @@ class PDFReconstructor:
         processed_count, ignored_count = 0, 0
         warnings = []
         
-        # Valider les données avant de continuer
         valid_elements = []
         for element in elements_on_page:
             if 'original_bbox' in element and 'new_bbox' in element:
                 valid_elements.append(element)
             else:
                 ignored_count += 1
-                msg = f"Élément {element.get('element_id', 'N/A')} ignoré : données de position manquantes."
-                warnings.append(msg)
-                self.logger.warning(msg)
+                warnings.append(f"Élément {element.get('element_id', 'N/A')} ignoré : données de position manquantes.")
         
-        # Appliquer les rédactions
         for element in valid_elements:
             new_page.add_redact_annot(fitz.Rect(element['original_bbox']))
         if valid_elements:
             new_page.apply_redactions()
 
-        # Placer le texte
         for element in valid_elements:
             self._place_translated_text(new_page, element)
             processed_count += 1
@@ -118,8 +99,7 @@ class PDFReconstructor:
         elements = []
         for elem_id, layout_info in layouts.items():
             if layout_info.get('page_number') == page_number and elem_id in validated_translations['translations']:
-                full_info = layout_info.copy()
-                full_info.update(validated_translations['translations'][elem_id])
+                full_info = layout_info.copy(); full_info.update(validated_translations['translations'][elem_id])
                 elements.append(full_info)
         return elements
     
@@ -132,20 +112,22 @@ class PDFReconstructor:
         font_size = element_layout['new_font_size']
         align = self._get_text_alignment(element_layout)
         original_font_name = element_layout.get('original_font_name', 'Arial')
+        
+        # --- MODIFICATION MAJEURE : Le reconstructeur obéit au FontManager ---
         font_path = self.font_manager.get_replacement_font_path(original_font_name)
         
         if font_path and font_path.exists():
-            page.insert_textbox(rect, text_to_render, fontsize=font_size, fontfile=str(font_path), align=align)
+            page.insert_textbox(rect, text_to_render, 
+                                     fontsize=font_size, 
+                                     fontfile=str(font_path), 
+                                     align=align)
         else:
-            font_name_fallback = self._get_fallback_fontname(original_font_name)
-            page.insert_textbox(rect, text_to_render, fontsize=font_size, fontname=font_name_fallback, align=align)
-
-    def _get_fallback_fontname(self, original_font_name: str) -> str:
-        name_lower = original_font_name.lower()
-        if 'bold' in name_lower and 'italic' in name_lower: return "helv-boit"
-        if 'bold' in name_lower: return "helv-bold"
-        if 'italic' in name_lower: return "helv-it"
-        return "helv"
+            # Fallback si le FontManager ne trouve rien (ne devrait pas arriver avec la nouvelle logique)
+            self.logger.warning(f"Aucun fichier de police trouvé pour '{original_font_name}', utilisation de Helvetica.")
+            page.insert_textbox(rect, text_to_render, 
+                                     fontsize=font_size, 
+                                     fontname="helv", 
+                                     align=align)
 
     def _get_text_alignment(self, element_layout: Dict[str, Any]) -> int:
         content_type = element_layout.get('content_type', 'paragraph')
