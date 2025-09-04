@@ -77,9 +77,9 @@ class MainWindow:
         
         required_fonts = [font['name'] for font in analysis_data.get('fonts_used', [])]
         
-        # Ne vérifier que les polices pour lesquelles l'utilisateur n'a pas déjà fait de choix
-        fonts_to_check = [font for font in required_fonts if font not in self.font_manager.font_mappings]
-        font_report = self.font_manager.check_fonts_availability(fonts_to_check)
+        # --- CORRECTION : Supprimer le filtrage prématuré. On envoie la liste complète au FontManager. ---
+        # L'ancienne ligne "fonts_to_check = ..." a été supprimée.
+        font_report = self.font_manager.check_fonts_availability(required_fonts)
 
         if not font_report['all_available']:
             self.logger.info(f"Polices manquantes détectées: {font_report['missing_fonts']}")
@@ -828,6 +828,7 @@ class MainWindow:
 
     def _preview_layout(self):
         messagebox.showinfo("Info", "Pas encore implémenté")
+
 
 
 
