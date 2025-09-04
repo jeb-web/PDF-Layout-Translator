@@ -37,7 +37,9 @@ class PDFReconstructor:
             for page_num in range(len(original_doc)):
                 self._process_page(original_doc, page_num, output_doc, layout_data, validated_translations)
 
-            output_doc.save(output_path, garbage=4, deflate=True, clean=True)
+            if len(output_doc) > 0:
+                output_doc.save(output_path, garbage=4, deflate=True, clean=True)
+
             original_doc.close(); output_doc.close()
             
             return ReconstructionResult(
@@ -77,31 +79,46 @@ class PDFReconstructor:
         return elements
     
     def _place_translated_text(self, page, element_layout: Dict[str, Any]):
-        translated_md = element_layout.get('translated_text', '')
-        if not translated_md: return
+        raw_translated_text = element_layout.get('translated_text', '')
+        if not raw_translated_text: return
+
+        # Nettoyer le Markdown pour l'affichage en texte brut
+        text_to_render = re.sub(r'\*+', '', raw_translated_text)
 
         rect = fitz.Rect(element_layout['new_bbox'])
         font_size = element_layout['new_font_size']
+        align = self._get_text_alignment(element_layout)
         
-        # --- MODIFICATION MAJEURE : Appel au FontManager pour obtenir la police ---
+        # --- MODIFICATION MAJEURE : Utilisation de fontfile ---
         original_font_name = element_layout.get('original_font_name', 'Arial')
         font_path = self.font_manager.get_replacement_font_path(original_font_name)
         
-        if font_path:
-            # Enregistrer la police personnalisée pour cette page
-            font_ref = page.insert_font(fontfile=str(font_path), fontname=font_path.stem)
-            fontname_for_html = font_path.stem
+        if font_path and font_path.exists():
+            rc = page.insert_textbox(rect, text_to_render, 
+                                     fontsize=font_size, 
+                                     fontfile=str(font_path), 
+                                     align=align)
         else:
-            # Fallback sur les polices PDF de base
-            fontname_for_html = 'helv' 
-
-        html_content = self._markdown_to_html(translated_md)
-        css = f"p {{ font-family: '{fontname_for_html}'; font-size: {font_size}pt; text-align: left; margin: 0; padding: 0; }}"
+            # Fallback sur une police de base si le fichier n'est pas trouvé
+            font_name_fallback = self._get_fallback_fontname(original_font_name)
+            rc = page.insert_textbox(rect, text_to_render, 
+                                     fontsize=font_size, 
+                                     fontname=font_name_fallback, 
+                                     align=align)
         
-        page.insert_htmlbox(rect, f"<p>{html_content}</p>", css=css)
+        if rc < 0:
+            self.logger.warning(f"Le texte pour l'élément {element_layout['element_id']} a peut-être débordé. Code: {rc}")
 
-    def _markdown_to_html(self, md_text: str) -> str:
-        text = md_text.replace('&', '&amp;').replace('<', '&lt;').replace('>', '&gt;')
-        text = re.sub(r'\*\*(.*?)\*\*', r'<b>\1</b>', text)
-        text = re.sub(r'\*(.*?)\*', r'<i>\1</i>', text)
-        return text.replace('\n', '<br>')
+    def _get_fallback_fontname(self, original_font_name: str) -> str:
+        """Détermine un nom de police PDF de base en fonction du style."""
+        name_lower = original_font_name.lower()
+        if 'bold' in name_lower and 'italic' in name_lower: return "helv-boit"
+        if 'bold' in name_lower: return "helv-bold"
+        if 'italic' in name_lower: return "helv-it"
+        return "helv"
+
+    def _get_text_alignment(self, element_layout: Dict[str, Any]) -> int:
+        content_type = element_layout.get('content_type', 'paragraph')
+        if content_type in ['title', 'subtitle', 'header', 'footer']:
+            return fitz.TEXT_ALIGN_CENTER
+        return fitz.TEXT_ALIGN_LEFT
