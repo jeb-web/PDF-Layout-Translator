@@ -512,11 +512,13 @@ class MainWindow:
             self.current_session_id = session_id
             self._update_session_info()
             
+            # --- MODIFICATION : Enchaînement automatique de l'analyse ---
             # Passer à l'onglet d'analyse
-            self.notebook.select(1)  # Onglet Analyse
-            self._update_global_progress(1, "Session créée")
+            self.notebook.select(1)
+            self._update_global_progress(1, "Session créée, démarrage de l'analyse...")
             
-            messagebox.showinfo("Succès", "Nouvelle session créée avec succès!")
+            # Lancer l'analyse automatiquement
+            self._analyze_pdf()
             
         except Exception as e:
             self.logger.error(f"Erreur création session: {e}")
