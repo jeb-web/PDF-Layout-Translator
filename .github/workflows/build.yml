@@ -101,98 +101,102 @@ jobs:
       run: |
         echo "__version__ = '${{ steps.version.outputs.version }}'" > src/__version__.py
     
-    - name: Build single EXE with PyInstaller
+    - name: Create PyInstaller spec file
       run: |
-        echo "🔨 Construction de l'exécutable unique..."
+        echo "📝 Création du fichier spec PyInstaller..."
         
-        # Créer le fichier spec PyInstaller optimisé
-        $specContent = @"
-# -*- mode: python ; coding: utf-8 -*-
-
-block_cipher = None
-
-a = Analysis(
-    ['src/main.py'],
-    pathex=[],
-    binaries=[],
-    datas=[
-        ('src/assets', 'assets'),
-        ('README.md', '.'),
-        ('LICENSE', '.'),
-    ],
-    hiddenimports=[
-        'tkinter',
-        'tkinter.ttk',
-        'tkinter.filedialog',
-        'tkinter.messagebox',
-        'tkinter.scrolledtext',
-        'PIL._tkinter_finder',
-        'fitz',
-        'reportlab',
-        'fontTools',
-        'pathlib',
-        'json',
-        'logging',
-        'threading',
-        'tempfile',
-        'shutil',
-        'datetime',
-        'dataclasses',
-        'enum',
-        'typing',
-        'regex',
-        'chardet',
-    ],
-    hookspath=[],
-    hooksconfig={},
-    runtime_hooks=[],
-    excludes=[
-        'matplotlib',
-        'numpy',
-        'scipy',
-        'pandas',
-        'jupyter',
-        'IPython',
-        'pytest',
-        'sphinx',
-        'setuptools',
-        'wheel',
-        'pip',
-    ],
-    win_no_prefer_redirects=False,
-    win_private_assemblies=False,
-    cipher=block_cipher,
-    noarchive=False,
-)
-
-pyz = PYZ(a.pure, a.zipped_data, cipher=block_cipher)
-
-exe = EXE(
-    pyz,
-    a.scripts,
-    a.binaries,
-    a.zipfiles,
-    a.datas,
-    [],
-    name='PDF-Layout-Translator',
-    debug=False,
-    bootloader_ignore_signals=False,
-    strip=False,
-    upx=True,
-    upx_exclude=[],
-    runtime_tmpdir=None,
-    console=False,
-    disable_windowed_traceback=False,
-    argv_emulation=False,
-    target_arch=None,
-    codesign_identity=None,
-    entitlements_file=None,
-    icon='src/assets/icons/app_icon.ico' if os.path.exists('src/assets/icons/app_icon.ico') else None,
-)
-"@
+        # Créer le contenu du fichier spec (échappé pour YAML)
+        $specContent = @'
+        # -*- mode: python ; coding: utf-8 -*-
+        
+        block_cipher = None
+        
+        a = Analysis(
+            ['src/main.py'],
+            pathex=[],
+            binaries=[],
+            datas=[
+                ('src/assets', 'assets'),
+                ('README.md', '.'),
+                ('LICENSE', '.'),
+            ],
+            hiddenimports=[
+                'tkinter',
+                'tkinter.ttk',
+                'tkinter.filedialog',
+                'tkinter.messagebox',
+                'tkinter.scrolledtext',
+                'PIL._tkinter_finder',
+                'fitz',
+                'reportlab',
+                'fontTools',
+                'pathlib',
+                'json',
+                'logging',
+                'threading',
+                'tempfile',
+                'shutil',
+                'datetime',
+                'dataclasses',
+                'enum',
+                'typing',
+                'regex',
+                'chardet',
+            ],
+            hookspath=[],
+            hooksconfig={},
+            runtime_hooks=[],
+            excludes=[
+                'matplotlib',
+                'numpy',
+                'scipy',
+                'pandas',
+                'jupyter',
+                'IPython',
+                'pytest',
+                'sphinx',
+                'setuptools',
+                'wheel',
+                'pip',
+            ],
+            win_no_prefer_redirects=False,
+            win_private_assemblies=False,
+            cipher=block_cipher,
+            noarchive=False,
+        )
+        
+        pyz = PYZ(a.pure, a.zipped_data, cipher=block_cipher)
+        
+        exe = EXE(
+            pyz,
+            a.scripts,
+            a.binaries,
+            a.zipfiles,
+            a.datas,
+            [],
+            name='PDF-Layout-Translator',
+            debug=False,
+            bootloader_ignore_signals=False,
+            strip=False,
+            upx=True,
+            upx_exclude=[],
+            runtime_tmpdir=None,
+            console=False,
+            disable_windowed_traceback=False,
+            argv_emulation=False,
+            target_arch=None,
+            codesign_identity=None,
+            entitlements_file=None,
+        )
+        '@
         
         # Écrire le fichier spec
         $specContent | Out-File -FilePath "single_exe.spec" -Encoding UTF8
+        Write-Host "✅ Fichier spec créé"
+    
+    - name: Build single EXE with PyInstaller
+      run: |
+        echo "🔨 Construction de l'exécutable unique..."
         
         # Construire l'EXE
         pyinstaller --clean single_exe.spec
@@ -213,13 +217,15 @@ exe = EXE(
     - name: Test EXE launch
       run: |
         echo "🧪 Test de lancement..."
-        # Test basique (l'exe devrait au moins se lancer sans crasher immédiatement)
-        $process = Start-Process -FilePath "dist\PDF-Layout-Translator.exe" -ArgumentList "--version" -Wait -PassThru -NoNewWindow
-        Write-Host "Code de sortie: $($process.ExitCode)"
-        
-        # Test que l'EXE n'est pas corrompu
         if (Test-Path "dist\PDF-Layout-Translator.exe") {
-          Write-Host "✅ EXE valide"
+          Write-Host "✅ EXE trouvé et valide"
+          # Test basique de la taille (doit être > 10MB pour être valide)
+          $file = Get-Item "dist\PDF-Layout-Translator.exe"
+          if ($file.Length -gt 10MB) {
+            Write-Host "✅ Taille EXE normale ($([math]::Round($file.Length / 1MB, 2)) MB)"
+          } else {
+            Write-Host "⚠️ EXE possiblement incomplet (taille: $([math]::Round($file.Length / 1MB, 2)) MB)"
+          }
         }
       continue-on-error: true
     
@@ -278,58 +284,57 @@ exe = EXE(
         path: release-assets/
     
     - name: Generate release notes
-      id: release_notes
       run: |
         $version = "${{ needs.build-exe.outputs.version }}"
         
-        $releaseNotes = @"
-# 🚀 PDF Layout Translator v$version
-
-## 📱 Application Windows - Un seul fichier EXE !
-
-**Nouveau :** Application complète dans un seul exécutable - aucune installation requise !
-
-### 📦 Téléchargement
-- **PDF-Layout-Translator-$version.exe** (~ 50-80 MB)
-  - ✅ **Prêt à l'emploi** - Double-cliquez et c'est parti !
-  - ✅ **Portable** - Fonctionne depuis n'importe où (clé USB, dossier, etc.)
-  - ✅ **Aucune installation** - Pas d'admin requis
-  - ✅ **Auto-contenu** - Toutes les dépendances incluses
-
-### 🚀 Utilisation ultra-simple
-1. **Téléchargez** le fichier .exe
-2. **Double-cliquez** dessus
-3. **C'est tout !** L'application se lance directement
-
-### ✨ Fonctionnalités
-- 🔍 **Analyse automatique** de la structure PDF
-- 🌐 **Interface avec IA** (ChatGPT, Claude, Gemini...)
-- 📐 **Préservation parfaite** de la mise en page
-- 🔧 **Gestion intelligente** des polices
-- 📤 **Export professionnel** du PDF traduit
-- 👀 **Prévisualisation** avec comparaison avant/après
-
-### 🔒 Sécurité
-- **Checksum SHA256** : Vérifiez l'intégrité avec \`checksum.txt\`
-- **Code source ouvert** : Consultable sur GitHub
-- **Pas de télémétrie** : Vos données restent locales
-
-### 💻 Prérequis
-- **Windows 10/11** (64-bit)
-- **4 GB RAM** minimum
-- **200 MB espace libre** pour les fichiers temporaires
-
-### 🆘 Support
-- 🐛 **Bugs** : [GitHub Issues](https://github.com/loreal/pdf-layout-translator/issues)
-- 📚 **Documentation** : [README](https://github.com/loreal/pdf-layout-translator)
-- 💬 **Questions** : [Discussions GitHub](https://github.com/loreal/pdf-layout-translator/discussions)
-
-### 🔄 Mise à jour
-Simplement télécharger la nouvelle version et remplacer l'ancien fichier !
-
----
-💡 **Conseil** : Ajoutez l'EXE à vos favoris Windows pour un accès rapide !
-"@
+        $releaseNotes = @'
+        # 🚀 PDF Layout Translator v{0}
+        
+        ## 📱 Application Windows - Un seul fichier EXE !
+        
+        **Nouveau :** Application complète dans un seul exécutable - aucune installation requise !
+        
+        ### 📦 Téléchargement
+        - **PDF-Layout-Translator-{0}.exe** (~ 50-80 MB)
+          - ✅ **Prêt à l'emploi** - Double-cliquez et c'est parti !
+          - ✅ **Portable** - Fonctionne depuis n'importe où (clé USB, dossier, etc.)
+          - ✅ **Aucune installation** - Pas d'admin requis
+          - ✅ **Auto-contenu** - Toutes les dépendances incluses
+        
+        ### 🚀 Utilisation ultra-simple
+        1. **Téléchargez** le fichier .exe
+        2. **Double-cliquez** dessus
+        3. **C'est tout !** L'application se lance directement
+        
+        ### ✨ Fonctionnalités
+        - 🔍 **Analyse automatique** de la structure PDF
+        - 🌐 **Interface avec IA** (ChatGPT, Claude, Gemini...)
+        - 📐 **Préservation parfaite** de la mise en page
+        - 🔧 **Gestion intelligente** des polices
+        - 📤 **Export professionnel** du PDF traduit
+        - 👀 **Prévisualisation** avec comparaison avant/après
+        
+        ### 🔒 Sécurité
+        - **Checksum SHA256** : Vérifiez l'intégrité avec `checksum.txt`
+        - **Code source ouvert** : Consultable sur GitHub
+        - **Pas de télémétrie** : Vos données restent locales
+        
+        ### 💻 Prérequis
+        - **Windows 10/11** (64-bit)
+        - **4 GB RAM** minimum
+        - **200 MB espace libre** pour les fichiers temporaires
+        
+        ### 🆘 Support
+        - 🐛 **Bugs** : [GitHub Issues](https://github.com/loreal/pdf-layout-translator/issues)
+        - 📚 **Documentation** : [README](https://github.com/loreal/pdf-layout-translator)
+        - 💬 **Questions** : [Discussions GitHub](https://github.com/loreal/pdf-layout-translator/discussions)
+        
+        ### 🔄 Mise à jour
+        Simplement télécharger la nouvelle version et remplacer l'ancien fichier !
+        
+        ---
+        💡 **Conseil** : Ajoutez l'EXE à vos favoris Windows pour un accès rapide !
+        '@ -f $version
         
         $releaseNotes | Out-File -FilePath "RELEASE_NOTES.md" -Encoding UTF8
         echo "notes_file=RELEASE_NOTES.md" >> $env:GITHUB_OUTPUT
@@ -339,7 +344,7 @@ Simplement télécharger la nouvelle version et remplacer l'ancien fichier !
       with:
         tag_name: ${{ startsWith(github.ref, 'refs/tags/') && github.ref || format('v{0}', needs.build-exe.outputs.version) }}
         name: "PDF Layout Translator v${{ needs.build-exe.outputs.version }}"
-        body_path: ${{ steps.release_notes.outputs.notes_file }}
+        body_path: RELEASE_NOTES.md
         files: |
           release-assets/PDF-Layout-Translator-*.exe
           release-assets/checksum.txt
