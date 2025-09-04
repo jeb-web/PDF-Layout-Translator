@@ -14,9 +14,11 @@ from pathlib import Path
 from typing import Dict, List, Any, Optional
 from datetime import datetime
 import shutil
+from dataclasses import dataclass  # <-- FIX: Ligne d'importation ajoutée
 
 @dataclass
 class ReconstructionResult:
+    """Résultat de la reconstruction"""
     success: bool
     output_path: Optional[Path]
     processing_time: float
@@ -26,13 +28,35 @@ class ReconstructionResult:
     warnings: List[str]
 
 class PDFReconstructor:
+    """Reconstructeur de PDF avec texte traduit"""
+    
     def __init__(self, config_manager=None, font_manager=None):
+        """
+        Initialise le reconstructeur PDF
+        
+        Args:
+            config_manager: Gestionnaire de configuration (optionnel)
+            font_manager: Gestionnaire de polices (optionnel)
+        """
         self.logger = logging.getLogger(__name__)
-        self.font_manager = font_manager # Nécessaire pour les polices
+        self.font_manager = font_manager
 
     def reconstruct_pdf(self, original_pdf_path: Path, layout_data: Dict[str, Any],
                        validated_translations: Dict[str, Any], output_path: Path,
                        preserve_original: bool = True) -> ReconstructionResult:
+        """
+        Reconstruit le PDF avec les traductions et ajustements de mise en page
+        
+        Args:
+            original_pdf_path: Chemin vers le PDF original
+            layout_data: Données de mise en page du layout_processor
+            validated_translations: Traductions validées
+            output_path: Chemin de sortie du PDF
+            preserve_original: Créer une sauvegarde de l'original
+            
+        Returns:
+            Résultat de la reconstruction
+        """
         start_time = datetime.now()
         self.logger.info(f"Début de la reconstruction: {original_pdf_path} -> {output_path}")
         
@@ -76,7 +100,7 @@ class PDFReconstructor:
         
         new_page = output_doc.new_page(width=original_page.rect.width, height=original_page.rect.height)
         
-        # Copie des images (simplifié, peut être amélioré)
+        # Copie des images (simplifié)
         for img in original_page.get_images(full=True):
             xref = img[0]
             if xref > 0:
@@ -84,9 +108,8 @@ class PDFReconstructor:
                 for rect in rects:
                     try:
                         new_page.insert_image(rect, stream=original_page.parent.extract_image(xref)["image"])
-                    except:
-                        self.logger.warning(f"Impossible de copier une image sur la page {page_number}")
-
+                    except Exception as img_e:
+                        self.logger.warning(f"Impossible de copier une image sur la page {page_number}: {img_e}")
 
         elements_on_page = self._get_page_text_elements(page_number, layout_data)
         
@@ -94,12 +117,11 @@ class PDFReconstructor:
             try:
                 self._place_translated_text(new_page, element_layout, validated_translations)
             except Exception as e:
-                self.logger.warning(f"Erreur placement texte {element_layout['element_id']}: {e}")
+                self.logger.warning(f"Erreur placement texte {element_layout.get('element_id', 'N/A')}: {e}")
 
         return {'elements_processed': len(elements_on_page), 'warnings': []}
 
     def _get_page_text_elements(self, page_number: int, layout_data: Dict[str, Any]) -> List[Dict[str, Any]]:
-        # --- FIX : Logique corrigée pour filtrer les éléments par page ---
         return [
             elem for elem in layout_data.get('element_layouts', [])
             if elem.get('page_number') == page_number
@@ -117,7 +139,6 @@ class PDFReconstructor:
         font_size = element_layout['new_font_size']
         rect = fitz.Rect(bbox)
 
-        # --- FIX : Utiliser les informations de police et de type de contenu ---
         font_name = self._determine_font_for_element(element_layout)
         align = self._get_text_alignment(element_layout)
 
@@ -130,18 +151,18 @@ class PDFReconstructor:
         )
 
     def _determine_font_for_element(self, element_layout: Dict[str, Any]) -> str:
-        # --- FIX : Logique corrigée pour trouver une police de remplacement ---
         original_font = element_layout.get('original_font_name', 'helv')
         
-        # Logique de base : essayer de trouver une police système commune
+        # Logique de base pour choisir une police de base PDF
         if 'bold' in original_font.lower():
             return "helv-bold"
         if 'italic' in original_font.lower():
             return "helv-it"
+        if 'bold' in original_font.lower() and 'italic' in original_font.lower():
+            return "helv-boit"
         return "helv" # Helvetica de base
 
     def _get_text_alignment(self, element_layout: Dict[str, Any]) -> int:
-        # --- FIX : Logique corrigée pour déterminer l'alignement ---
         content_type = element_layout.get('content_type', 'paragraph')
         if content_type in ['title', 'subtitle']:
             return fitz.TEXT_ALIGN_CENTER
