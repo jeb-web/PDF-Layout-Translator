@@ -25,6 +25,7 @@ from core.translation_parser import TranslationParser, ValidationLevel
 from utils.font_manager import FontManager
 from core.layout_processor import LayoutProcessor
 from core.pdf_reconstructor import PDFReconstructor
+from gui.font_dialog import FontDialog #
 
 class MainWindow:
     """Fenêtre principale de l'application"""
@@ -69,7 +70,23 @@ class MainWindow:
         x = (self.root.winfo_screenwidth() // 2) - (1200 // 2)
         y = (self.root.winfo_screenheight() // 2) - (800 // 2)
         self.root.geometry(f"1200x800+{x}+{y}")
-    
+        
+    def _post_analysis_step(self, analysis_data):
+        """Ce qui se passe après une analyse réussie, y compris la validation des polices."""
+        self._display_analysis_results(analysis_data)
+        
+        # --- NOUVELLE LOGIQUE : Vérification des polices ---
+        required_fonts = [font['name'] for font in analysis_data.get('fonts_used', [])]
+        font_report = self.font_manager.check_fonts_availability(required_fonts)
+
+        if not font_report['all_available']:
+            self.logger.info(f"Polices manquantes détectées: {font_report['missing_fonts']}")
+            font_dialog = FontDialog(self.root, self.font_manager, font_report)
+            font_dialog.show() # Attend que l'utilisateur ait fait ses choix
+        
+        self._update_global_progress(2, "Analyse terminée, polices validées")
+        self.continue_to_translation_button.config(state='normal') 
+        
     def _create_widgets(self):
         main_frame = ttk.Frame(self.root)
         main_frame.pack(fill='both', expand=True, padx=10, pady=10)
@@ -438,8 +455,8 @@ class MainWindow:
                 self.session_manager.save_analysis_data(analysis_data, self.current_session_id)
                 self.session_manager.update_session_status(SessionStatus.READY_FOR_TRANSLATION, self.current_session_id)
                 
-                self.root.after(0, self._display_analysis_results, analysis_data)
-                self._update_global_progress(2, "Analyse terminée")
+                # MODIFICATION : Appeler la nouvelle fonction post-analyse
+                self.root.after(0, self._post_analysis_step, analysis_data)
                 
             except Exception as e:
                 self.logger.error(f"Erreur analyse PDF: {e}")
@@ -801,4 +818,5 @@ class MainWindow:
 
     def _preview_layout(self):
         messagebox.showinfo("Info", "Pas encore implémenté")
+
 
