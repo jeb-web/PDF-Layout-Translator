@@ -297,7 +297,8 @@ class FileUtils:
             
             validation_result["page_count"] = len(doc)
             validation_result["is_encrypted"] = doc.needs_pass
-            validation_result["pdf_version"] = doc.pdf_version()
+            # --- FIX: Replaced doc.pdf_version() with metadata lookup ---
+            validation_result["pdf_version"] = doc.metadata.get('format', 'Inconnue')
             
             # Vérifier le contenu
             has_text = False
