@@ -72,7 +72,7 @@ class MainWindow:
         x = (self.root.winfo_screenwidth() // 2) - (1200 // 2)
         y = (self.root.winfo_screenheight() // 2) - (800 // 2)
         self.root.geometry(f"1200x800+{x}+{y}")
-    
+        
     def _create_widgets(self):
         main_frame = ttk.Frame(self.root)
         main_frame.pack(fill='both', expand=True, padx=10, pady=10)
@@ -450,22 +450,6 @@ class MainWindow:
         
         threading.Thread(target=analyze_thread, daemon=True).start()
     
-    def _post_analysis_step(self, analysis_data):
-        self._display_analysis_results(analysis_data)
-        required_fonts = [font['name'] for font in analysis_data.get('fonts_used', [])]
-        
-        # Ne vérifier que les polices pour lesquelles l'utilisateur n'a pas déjà fait de choix
-        fonts_to_check = [font for font in required_fonts if font not in self.font_manager.font_mappings]
-        font_report = self.font_manager.check_fonts_availability(fonts_to_check)
-
-        if not font_report['all_available']:
-            self.logger.info(f"Polices manquantes détectées: {font_report['missing_fonts']}")
-            font_dialog = FontDialog(self.root, self.font_manager, font_report)
-            font_dialog.show()
-        
-        self._update_global_progress(2, "Analyse terminée, polices validées")
-        self.continue_to_translation_button.config(state='normal')
-
     def _display_analysis_results(self, analysis_data: Dict[str, Any]):
         doc_info = analysis_data['document_info']
         info_text = f"Pages: {doc_info['page_count']}\nVersion PDF: {doc_info['pdf_version']}"
