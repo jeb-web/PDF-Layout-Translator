@@ -125,9 +125,11 @@ class PDFReconstructor:
         font_name = self._determine_font_for_element(element_layout)
         align = self._get_text_alignment(element_layout)
         
+        self.logger.debug(f"Placement de '{translated_text[:30]}...' dans le rect {rect} avec police {font_name} et taille {font_size}")
+
         rc = page.insert_textbox(rect, translated_text, fontsize=font_size, fontname=font_name, align=align)
         if rc < 0:
-            self.logger.warning(f"Texte pour l'élément {element_layout['element_id']} a peut-être débordé. Code: {rc}")
+            self.logger.warning(f"Le texte pour l'élément {element_layout['element_id']} a peut-être débordé. Code: {rc}")
 
     def _determine_font_for_element(self, element_layout: Dict[str, Any]) -> str:
         original_font = element_layout.get('original_font_name', 'helv').lower()
