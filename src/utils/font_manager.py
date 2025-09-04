@@ -50,15 +50,11 @@ class FontManager:
         self.logger.info(f"FontManager initialisé: {len(self.font_families)} familles de polices trouvées.")
 
     def _scan_system_fonts(self):
-        """Scanne les polices système de manière exhaustive."""
-        self.logger.info("Scanning exhaustif des polices système...")
         if platform.system() == "Windows":
             self._scan_fonts_from_registry()
         self._scan_fonts_from_folders()
 
     def _scan_fonts_from_registry(self):
-        """Méthode Windows: lit les polices depuis le registre pour une fiabilité maximale."""
-        self.logger.debug("Scan des polices depuis le registre Windows...")
         font_dir = Path(os.environ.get('WINDIR', 'C:\\Windows')) / 'Fonts'
         try:
             with winreg.OpenKey(winreg.HKEY_LOCAL_MACHINE, r"SOFTWARE\Microsoft\Windows NT\CurrentVersion\Fonts") as key:
@@ -71,14 +67,11 @@ class FontManager:
                             self._process_font_file(font_path)
                             self._scanned_files.add(font_path)
                         i += 1
-                    except OSError:
-                        break
+                    except OSError: break
         except Exception as e:
-            self.logger.error(f"Erreur d'accès au registre, le scan sera moins complet: {e}")
+            self.logger.error(f"Erreur d'accès au registre: {e}")
 
     def _scan_fonts_from_folders(self):
-        """Scanne les dossiers de polices connus."""
-        self.logger.debug("Scan des polices depuis les dossiers système...")
         font_extensions = {'.ttf', '.otf', '.ttc'}
         for font_dir in self._get_system_font_directories():
             for font_file in font_dir.rglob('*'):
@@ -106,8 +99,7 @@ class FontManager:
                     self._add_font_from_metadata(font, font_path)
             else:
                 self._add_font_from_metadata(font_collection, font_path)
-        except (TTLibError, Exception):
-            pass
+        except (TTLibError, Exception): pass
 
     def _add_font_from_metadata(self, font: TTFont, font_path: Path):
         name_table = font['name']
@@ -138,46 +130,63 @@ class FontManager:
         return {'missing_fonts': list(missing_fonts), 'suggestions': suggestions, 'all_available': not missing_fonts}
 
     def _suggest_alternatives(self, missing_font: str) -> List[Dict[str, Any]]:
-        # Logique de suggestion améliorée à l'avenir
         return [{'font_name': "Arial Regular"}]
-
+        
     def create_font_mapping(self, original_font: str, replacement_font_name: str):
         self.font_mappings[original_font] = FontMapping(original_font, replacement_font_name)
         self._save_font_mappings()
-        self.logger.info(f"Mapping sauvegardé: '{original_font}' -> '{replacement_font_name}'")
 
     def get_replacement_font_path(self, original_font_name: str) -> Optional[Path]:
         """
-        La fonction clé : trouve le chemin vers le fichier de la police de remplacement.
+        Trouve le chemin vers le fichier de police de remplacement avec une logique de fallback.
         """
-        replacement_name = None
         # Priorité 1: Le choix de l'utilisateur
         if original_font_name in self.font_mappings:
             replacement_name = self.font_mappings[original_font_name].replacement_font_name
-        
-        # Priorité 2: Suggestion intelligente et fallback
-        if not replacement_name:
-            replacement_name = self._suggest_alternatives(original_font_name)[0]['font_name']
+            path = self._find_path_for_full_name(replacement_name)
+            if path:
+                self.logger.debug(f"Mapping utilisateur trouvé pour '{original_font_name}' -> '{replacement_name}'")
+                return path
 
-        # --- NOUVELLE LOGIQUE : Traduire le nom en chemin de fichier ---
-        family, style = self._split_font_name(replacement_name)
+        # Priorité 2: Suggestion intelligente (recherche de style dans une famille commune)
+        style_hints = self._get_style_hints(original_font_name)
+        common_families = ["Arial", "Times New Roman", "Calibri", "Verdana"]
+        for family in common_families:
+            path = self._find_best_style_in_family(family, style_hints)
+            if path:
+                self.logger.debug(f"Suggestion intelligente pour '{original_font_name}' -> '{path.name}'")
+                return path
         
-        if family in self.font_families:
-            # Essayer de trouver le style exact
-            if style in self.font_families[family].styles:
-                return self.font_families[family].styles[style].path
-            # Si le style n'existe pas, se rabattre sur "Regular"
-            elif "Regular" in self.font_families[family].styles:
-                return self.font_families[family].styles["Regular"].path
-            # Sinon, prendre n'importe quel style de cette famille
-            else:
-                return next(iter(self.font_families[family].styles.values())).path
-        
-        self.logger.warning(f"Impossible de trouver un fichier pour la police de remplacement '{replacement_name}'")
-        return None # En dernier recours
+        self.logger.warning(f"Aucune police de remplacement trouvée pour '{original_font_name}'.")
+        return None
+
+    def _find_path_for_full_name(self, full_name: str) -> Optional[Path]:
+        """Trouve le chemin d'un fichier à partir de son nom complet (Famille + Style)."""
+        family, style = self._split_font_name(full_name)
+        if family in self.font_families and style in self.font_families[family].styles:
+            return self.font_families[family].styles[style].path
+        return None
+
+    def _find_best_style_in_family(self, family_name: str, style_hints: List[str]) -> Optional[Path]:
+        """Cherche le meilleur style correspondant dans une famille donnée."""
+        if family_name in self.font_families:
+            family_styles = self.font_families[family_name].styles
+            # Essayer de trouver une correspondance exacte des styles
+            for style_name, style_obj in family_styles.items():
+                if all(hint in style_name.lower() for hint in style_hints):
+                    return style_obj.path
+            # Si non trouvé, se rabattre sur "Regular"
+            if "Regular" in family_styles:
+                return family_styles["Regular"].path
+        return None
+
+    def _get_style_hints(self, font_name: str) -> List[str]:
+        hints = []; name_lower = font_name.lower()
+        if 'bold' in name_lower: hints.append('bold')
+        if 'italic' in name_lower: hints.append('italic')
+        return hints
 
     def _split_font_name(self, full_name: str) -> Tuple[str, str]:
-        """Sépare un nom de police complet en famille et style."""
         for family_name in sorted(self.font_families.keys(), key=len, reverse=True):
             if full_name.lower().startswith(family_name.lower()):
                 style = full_name[len(family_name):].strip()
@@ -194,13 +203,11 @@ class FontManager:
                             original_font=mapping_data['original_font'],
                             replacement_font_name=mapping_data['replacement_font_name']
                         )
-            except Exception as e:
-                self.logger.error(f"Erreur chargement mappings: {e}")
+            except Exception: pass
 
     def _save_font_mappings(self):
         self.font_mappings_file.parent.mkdir(parents=True, exist_ok=True)
         try:
             with open(self.font_mappings_file, 'w', encoding='utf-8') as f:
                 json.dump({k: v.__dict__ for k, v in self.font_mappings.items()}, f, indent=2)
-        except Exception as e:
-            self.logger.error(f"Erreur lors de la sauvegarde des mappings: {e}")
+        except Exception: pass
