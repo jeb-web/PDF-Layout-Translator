@@ -18,11 +18,23 @@ from fontTools.ttLib import TTFont, TTLibError
 import json
 from datetime import datetime
 
+# Spécifique à Windows pour la lecture du registre
+if platform.system() == "Windows":
+    import winreg
+
+@dataclass
+class FontStyle:
+    path: Path
+    
+@dataclass
+class FontFamily:
+    name: str
+    styles: Dict[str, FontStyle] = None
+
 @dataclass
 class FontMapping:
     original_font: str
     replacement_font: str
-    mapping_type: str  # 'automatic', 'user_choice', 'fallback'
 
 class FontManager:
     """Gestionnaire de polices système et personnalisées."""
@@ -32,83 +44,99 @@ class FontManager:
         self.app_data_dir = Path(app_data_dir)
         self.font_mappings_file = self.app_data_dir / "config" / "font_mappings.json"
         
-        # --- MODIFICATION: Le dictionnaire stocke maintenant {VraiNom: CheminFichier} ---
-        self.system_fonts: Dict[str, Path] = {}
+        # Structure de données améliorée: {NomFamille: FontFamily}
+        self.font_families: Dict[str, FontFamily] = {}
         self.font_mappings: Dict[str, FontMapping] = {}
         
         self._scan_system_fonts()
         self._load_font_mappings()
         
-        self.logger.info(f"FontManager initialisé: {len(self.system_fonts)} polices système trouvées.")
-    
-    def _get_system_font_directories(self) -> List[Path]:
-        system = platform.system().lower()
-        dirs = []
-        if system == 'windows':
-            dirs.append(Path(os.environ.get('WINDIR', 'C:\\Windows')) / 'Fonts')
-        elif system == 'darwin': # macOS
-            dirs.extend([Path('/System/Library/Fonts'), Path('/Library/Fonts'), Path.home() / 'Library' / 'Fonts'])
-        else: # Linux
-            dirs.extend([Path('/usr/share/fonts'), Path('/usr/local/share/fonts'), Path.home() / '.fonts'])
-        
-        return [d for d in dirs if d.exists()]
-
-    def _get_font_real_name(self, font_path: Path) -> Optional[str]:
-        """
-        Ouvre un fichier de police et lit son vrai nom depuis les métadonnées.
-        """
-        try:
-            with TTFont(font_path, lazy=True) as font:
-                # La table 'name' contient les métadonnées de la police
-                name_table = font['name']
-                full_name = None
-                family_name = None
-
-                for record in name_table.names:
-                    # nameID 4 est le "Full Font Name", c'est le plus fiable
-                    if record.nameID == 4:
-                        full_name = record.toUnicode()
-                    # nameID 1 est la famille (ex: "Arial")
-                    elif record.nameID == 1:
-                        family_name = record.toUnicode()
-
-                # Retourner le nom complet si disponible, sinon la famille, sinon None
-                return full_name if full_name else family_name
-        except (TTLibError, Exception) as e:
-            # Gérer les fichiers de police corrompus ou illisibles
-            self.logger.debug(f"Impossible de lire le nom de la police {font_path}: {e}")
-            return None
+        self.logger.info(f"FontManager initialisé: {len(self.font_families)} familles de polices trouvées.")
     
     def _scan_system_fonts(self):
-        self.logger.info("Scanning des polices système (lecture des métadonnées)...")
+        """Scanne les polices système de manière exhaustive."""
+        self.logger.info("Scanning exhaustif des polices système...")
+        if platform.system() == "Windows":
+            self._scan_fonts_from_registry()
+        else:
+            self._scan_fonts_from_folders()
+
+    def _scan_fonts_from_registry(self):
+        """Méthode Windows: lit les polices depuis le registre pour une fiabilité maximale."""
+        font_dir = Path(os.environ.get('WINDIR', 'C:\\Windows')) / 'Fonts'
+        try:
+            with winreg.OpenKey(winreg.HKEY_LOCAL_MACHINE, r"SOFTWARE\Microsoft\Windows NT\CurrentVersion\Fonts") as key:
+                i = 0
+                while True:
+                    try:
+                        value_name, file_name, _ = winreg.EnumValue(key, i)
+                        font_path = font_dir / file_name
+                        if font_path.exists():
+                            self._process_font_file(font_path)
+                        i += 1
+                    except OSError:
+                        break # Fin de la liste
+        except Exception as e:
+            self.logger.error(f"Erreur d'accès au registre, fallback sur le scan de dossier: {e}")
+            self._scan_fonts_from_folders() # Solution de secours
+
+    def _scan_fonts_from_folders(self):
+        """Méthode de secours pour macOS/Linux ou en cas d'échec du registre."""
+        font_dirs = self._get_system_font_directories()
         font_extensions = {'.ttf', '.otf', '.ttc'}
+        for font_dir in font_dirs:
+            if font_dir.exists():
+                for font_file in font_dir.rglob('*'):
+                    if font_file.suffix.lower() in font_extensions:
+                        self._process_font_file(font_file)
+
+    def _process_font_file(self, font_path: Path):
+        """Ouvre un fichier de police, lit ses métadonnées et l'ajoute à la structure."""
+        try:
+            font = TTFont(font_path, lazy=True)
+            
+            # Gérer les collections de polices (.ttc)
+            if hasattr(font, 'reader') and 'ttc' in font.reader.file.name.lower():
+                for i in range(len(font.reader.fonts)):
+                    sub_font = TTFont(font_path, fontNumber=i, lazy=True)
+                    self._add_font_from_metadata(sub_font, font_path)
+            else:
+                self._add_font_from_metadata(font, font_path)
+        except (TTLibError, Exception) as e:
+            self.logger.debug(f"Impossible de traiter le fichier de police {font_path}: {e}")
+
+    def _add_font_from_metadata(self, font: TTFont, font_path: Path):
+        """Extrait les noms et ajoute la police à la structure de familles."""
+        name_table = font['name']
+        family_name, style_name = None, None
         
-        for font_dir in self._get_system_font_directories():
-            for font_file in font_dir.rglob('*'):
-                if font_file.suffix.lower() in font_extensions:
-                    real_name = self._get_font_real_name(font_file)
-                    if real_name and real_name not in self.system_fonts:
-                        # --- MODIFICATION: Utilisation du vrai nom comme clé ---
-                        self.system_fonts[real_name] = font_file
+        for record in name_table.names:
+            if record.nameID == 1: family_name = record.toUnicode()
+            elif record.nameID == 2: style_name = record.toUnicode()
+
+        if family_name and style_name:
+            if family_name not in self.font_families:
+                self.font_families[family_name] = FontFamily(name=family_name, styles={})
+            self.font_families[family_name].styles[style_name] = FontStyle(path=font_path)
 
     def get_all_available_fonts(self) -> List[str]:
-        return sorted(list(self.system_fonts.keys()))
+        """Retourne une liste plate de tous les noms de polices complets (Famille + Style)."""
+        full_font_names = []
+        for family in self.font_families.values():
+            for style in family.styles.keys():
+                if style.lower() == 'regular':
+                    full_font_names.append(family.name)
+                else:
+                    full_font_names.append(f"{family.name} {style}")
+        return sorted(full_font_names)
 
     def check_fonts_availability(self, required_fonts: List[str]) -> Dict[str, Any]:
-        available_system_fonts_lower = {name.lower(): name for name in self.system_fonts.keys()}
+        available_fonts_list = self.get_all_available_fonts()
+        available_fonts_lower = {name.lower() for name in available_fonts_list}
         missing_fonts = []
         
         for font_name in set(required_fonts):
-            # Normaliser le nom de la police requise
-            normalized_font_name = font_name.replace('-', ' ').replace('_', ' ')
-            
-            # Vérifier s'il existe une correspondance (insensible à la casse)
-            found = False
-            for available_font_lower in available_system_fonts_lower:
-                if normalized_font_name.lower() in available_font_lower:
-                    found = True
-                    break
-            if not found:
+            if font_name.lower() not in available_fonts_lower:
                 missing_fonts.append(font_name)
         
         suggestions = {font: self._suggest_alternatives(font) for font in missing_fonts}
@@ -120,35 +148,25 @@ class FontManager:
         }
 
     def _suggest_alternatives(self, missing_font: str) -> List[Dict[str, Any]]:
-        suggestions = []
         missing_lower = missing_font.lower()
         
-        if 'bold' in missing_lower: suggestions.append({'font_name': 'Arial Bold', 'confidence': 0.7})
-        elif 'italic' in missing_lower: suggestions.append({'font_name': 'Arial Italic', 'confidence': 0.7})
+        # Priorité 1: Trouver le même style dans une famille de base
+        if 'bold' in missing_lower and "Arial Bold" in self.get_all_available_fonts(): return [{'font_name': "Arial Bold"}]
+        if 'italic' in missing_lower and "Arial Italic" in self.get_all_available_fonts(): return [{'font_name': "Arial Italic"}]
         
-        suggestions.append({'font_name': 'Arial', 'confidence': 0.5})
-        
-        # Filtrer pour ne suggérer que des polices réellement disponibles
-        available_fonts = self.get_all_available_fonts()
-        return [s for s in suggestions if s['font_name'] in available_fonts]
+        # Priorité 2: Fallback sur la famille de base
+        if "Arial" in self.get_all_available_fonts(): return [{'font_name': "Arial"}]
+        return [{'font_name': "Helvetica"}] # Fallback absolu
 
-    def create_font_mapping(self, original_font: str, replacement_font: str, mapping_type: str = 'user_choice'):
-        mapping = FontMapping(
-            original_font=original_font,
-            replacement_font=replacement_font,
-            mapping_type=mapping_type,
-        )
-        self.font_mappings[original_font] = mapping
+    def create_font_mapping(self, original_font: str, replacement_font: str):
+        self.font_mappings[original_font] = FontMapping(original_font, replacement_font)
         self._save_font_mappings()
         self.logger.info(f"Correspondance de police sauvegardée: '{original_font}' -> '{replacement_font}'")
 
     def get_replacement_font(self, original_font: str) -> str:
         if original_font in self.font_mappings:
             return self.font_mappings[original_font].replacement_font
-        
-        if 'bold' in original_font.lower(): return 'Arial Bold'
-        if 'italic' in original_font.lower(): return 'Arial Italic'
-        return 'Arial'
+        return self._suggest_alternatives(original_font)[0]['font_name']
 
     def _load_font_mappings(self):
         if self.font_mappings_file.exists():
@@ -157,9 +175,8 @@ class FontManager:
                     data = json.load(f)
                     for original, mapping_data in data.items():
                         self.font_mappings[original] = FontMapping(**mapping_data)
-                self.logger.info(f"{len(self.font_mappings)} correspondances de polices chargées.")
             except Exception as e:
-                self.logger.error(f"Erreur lors du chargement des mappings: {e}")
+                self.logger.error(f"Erreur chargement mappings: {e}")
 
     def _save_font_mappings(self):
         self.font_mappings_file.parent.mkdir(parents=True, exist_ok=True)
