@@ -127,7 +127,8 @@ class PDFAnalyzer:
         """Analyse les informations générales du document"""
         return {
             'page_count': len(self.doc),
-            'pdf_version': self.doc.pdf_version(),
+            # --- FIX: Replaced self.doc.pdf_version() with metadata lookup ---
+            'pdf_version': self.doc.metadata.get('format', 'Inconnue'),
             'is_pdf_a': self.doc.is_pdf,
             'needs_password': self.doc.needs_pass,
             'is_dirty': self.doc.is_dirty,
