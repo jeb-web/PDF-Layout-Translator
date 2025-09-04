@@ -38,29 +38,37 @@ jobs:
         python-version: ${{ env.PYTHON_VERSION }}
         cache: 'pip'
     
-    # ADDED STEPS START HERE
     - name: Get version
       id: version
       shell: bash
       run: |
-        if [[ $GITHUB_REF == refs/tags/* ]]; then
-          VERSION=${GITHUB_REF#refs/tags/v}
+        # Get the full git describe output
+        GIT_DESCRIBE=$(git describe --tags --always 2>/dev/null || echo "0.0.0-dev")
+
+        if [[ $GITHUB_REF == refs/tags/v* ]]; then
+            # Case 1: A proper release tag. Use it directly.
+            # Example GITHUB_REF: refs/tags/v1.2.3 -> VERSION: 1.2.3
+            VERSION=${GITHUB_REF#refs/tags/v}
+        elif [[ "$GIT_DESCRIBE" == *"-"* && "$GIT_DESCRIBE" == *"g"* ]]; then
+            # Case 2: A git describe output with a tag, commit count, and hash.
+            # Example: v1.0.0-5-g0dd4923
+            # Convert to PEP 440 compliant version: 1.0.0.post5+g0dd4923
+            VERSION_NO_V=${GIT_DESCRIBE#v}
+            IFS='-' read -ra PARTS <<< "$VERSION_NO_V"
+            VERSION="${PARTS[0]}.post${PARTS[1]}+${PARTS[2]}"
         else
-          VERSION="1.0.0-dev-$(date +%Y%m%d)"
-          if command -v git &> /dev/null; then
-            GIT_VERSION=$(git describe --tags --always 2>/dev/null || echo "")
-            if [ ! -z "$GIT_VERSION" ]; then
-              VERSION=$GIT_VERSION
-            fi
-          fi
+            # Case 3: No tags, git describe returns only the hash.
+            # Create a compliant dev version.
+            # Example GIT_DESCRIBE: 0dd4923 -> VERSION: 0.0.1.dev0+g0dd4923
+            HASH=${GIT_DESCRIBE}
+            VERSION="0.0.1.dev0+g${HASH}"
         fi
         echo "version=$VERSION" >> $GITHUB_OUTPUT
         echo "📋 Version: $VERSION"
-    
+
     - name: Create version file
       run: |
         echo "__version__ = '${{ steps.version.outputs.version }}'" > src/__version__.py
-    # ADDED STEPS END HERE
 
     - name: Install dependencies
       run: |
@@ -107,16 +115,26 @@ jobs:
       id: version
       shell: bash
       run: |
-        if [[ $GITHUB_REF == refs/tags/* ]]; then
-          VERSION=${GITHUB_REF#refs/tags/v}
+        # Get the full git describe output
+        GIT_DESCRIBE=$(git describe --tags --always 2>/dev/null || echo "0.0.0-dev")
+
+        if [[ $GITHUB_REF == refs/tags/v* ]]; then
+            # Case 1: A proper release tag. Use it directly.
+            # Example GITHUB_REF: refs/tags/v1.2.3 -> VERSION: 1.2.3
+            VERSION=${GITHUB_REF#refs/tags/v}
+        elif [[ "$GIT_DESCRIBE" == *"-"* && "$GIT_DESCRIBE" == *"g"* ]]; then
+            # Case 2: A git describe output with a tag, commit count, and hash.
+            # Example: v1.0.0-5-g0dd4923
+            # Convert to PEP 440 compliant version: 1.0.0.post5+g0dd4923
+            VERSION_NO_V=${GIT_DESCRIBE#v}
+            IFS='-' read -ra PARTS <<< "$VERSION_NO_V"
+            VERSION="${PARTS[0]}.post${PARTS[1]}+${PARTS[2]}"
         else
-          VERSION="1.0.0-dev-$(date +%Y%m%d)"
-          if command -v git &> /dev/null; then
-            GIT_VERSION=$(git describe --tags --always 2>/dev/null || echo "")
-            if [ ! -z "$GIT_VERSION" ]; then
-              VERSION=$GIT_VERSION
-            fi
-          fi
+            # Case 3: No tags, git describe returns only the hash.
+            # Create a compliant dev version.
+            # Example GIT_DESCRIBE: 0dd4923 -> VERSION: 0.0.1.dev0+g0dd4923
+            HASH=${GIT_DESCRIBE}
+            VERSION="0.0.1.dev0+g${HASH}"
         fi
         echo "version=$VERSION" >> $GITHUB_OUTPUT
         echo "📋 Version: $VERSION"
