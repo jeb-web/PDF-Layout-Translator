@@ -42,9 +42,7 @@ jobs:
       id: version
       shell: bash
       run: |
-        # Get the full git describe output
         GIT_DESCRIBE=$(git describe --tags --always 2>/dev/null || echo "0.0.0-dev")
-
         if [[ $GITHUB_REF == refs/tags/v* ]]; then
             VERSION=${GITHUB_REF#refs/tags/v}
         elif [[ "$GIT_DESCRIBE" == *"-"* && "$GIT_DESCRIBE" == *"g"* ]]; then
@@ -99,14 +97,11 @@ jobs:
         python-version: ${{ env.PYTHON_VERSION }}
         cache: 'pip'
 
-    # CORRECTED ORDER: Get version and create file BEFORE installing
     - name: Get version
       id: version
       shell: bash
       run: |
-        # Get the full git describe output
         GIT_DESCRIBE=$(git describe --tags --always 2>/dev/null || echo "0.0.0-dev")
-
         if [[ $GITHUB_REF == refs/tags/v* ]]; then
             VERSION=${GITHUB_REF#refs/tags/v}
         elif [[ "$GIT_DESCRIBE" == *"-"* && "$GIT_DESCRIBE" == *"g"* ]]; then
@@ -144,9 +139,8 @@ jobs:
             pathex=[],
             binaries=[],
             datas=[
-                ('src/assets', 'assets'),
+                ('src\\\\assets', 'assets'),
                 ('README.md', '.'),
-                ('LICENSE', '.'),
             ],
             hiddenimports=[
                 'tkinter', 'tkinter.ttk', 'tkinter.filedialog', 'tkinter.messagebox',
@@ -201,6 +195,7 @@ jobs:
           Write-Host "📊 Taille: $sizeInMB MB"
         } else {
           Write-Host "❌ Échec de la création de l'EXE"
+          Get-ChildItem dist\ -ErrorAction SilentlyContinue
           exit 1
         }
     
