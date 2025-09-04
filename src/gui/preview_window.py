@@ -316,7 +316,7 @@ class PreviewWindow:
                 
             except Exception as e:
                 self.logger.error(f"Erreur chargement documents: {e}")
-                self.window.after(0, lambda: messagebox.showerror("Erreur", f"Erreur lors du chargement: {e}"))
+                self.window.after(0, lambda e=e: messagebox.showerror("Erreur", f"Erreur lors du chargement: {e}"))
             finally:
                 self.window.after(0, lambda: self._set_loading(False))
         
@@ -361,7 +361,7 @@ class PreviewWindow:
                 
             except Exception as e:
                 self.logger.error(f"Erreur génération aperçu: {e}")
-                self.window.after(0, lambda: messagebox.showerror("Erreur", f"Erreur lors de la génération: {e}"))
+                self.window.after(0, lambda e=e: messagebox.showerror("Erreur", f"Erreur lors de la génération: {e}"))
             finally:
                 self.window.after(0, lambda: self._set_loading(False))
         
@@ -825,4 +825,5 @@ RACCOURCIS:
     
     def set_zoom_level(self, zoom: float):
         """Définit le niveau de zoom (interface publique)"""
+
         self._set_zoom(zoom)
