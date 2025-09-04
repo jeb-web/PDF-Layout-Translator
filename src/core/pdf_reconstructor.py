@@ -28,7 +28,6 @@ class ReconstructionResult:
 class PDFReconstructor:
     def __init__(self, config_manager=None, font_manager=None):
         self.logger = logging.getLogger(__name__)
-        self.font_manager = font_manager
 
     def reconstruct_pdf(self, original_pdf_path: Path, layout_data: Dict[str, Any],
                        validated_translations: Dict[str, Any], output_path: Path,
@@ -44,7 +43,7 @@ class PDFReconstructor:
             output_doc = fitz.open()
             
             total_layouts = len(layout_data.get('element_layouts', []))
-            self.logger.info(f"Le reconstructeur a reçu {total_layouts} éléments de mise en page.")
+            self.logger.info(f"DEBUG: Le reconstructeur a reçu {total_layouts} éléments de mise en page au total.")
 
             for page_num in range(len(original_doc)):
                 page_result = self._process_page(
@@ -55,10 +54,11 @@ class PDFReconstructor:
                 elements_processed += page_result['elements_processed']
                 warnings.extend(page_result['warnings'])
 
-            if len(output_doc) > 0:
-                output_doc.save(output_path, garbage=4, deflate=True, clean=True)
+            if len(output_doc) == 0:
+                warnings.append("Le document de sortie est vide car aucune page n'a été traitée.")
+                self.logger.warning("Le document de sortie est vide.")
             else:
-                warnings.append("Le document de sortie est vide, aucune page n'a été traitée.")
+                output_doc.save(output_path, garbage=4, deflate=True, clean=True)
 
             original_doc.close()
             output_doc.close()
@@ -84,24 +84,19 @@ class PDFReconstructor:
         page_number = page_num + 1
         self.logger.info(f"Traitement de la page {page_number}...")
 
-        # --- FIX: Implémentation de la méthode de reconstruction robuste ---
-        
-        # 1. Copier la page originale parfaitement dans le nouveau document
         output_doc.insert_pdf(original_doc, from_page=page_num, to_page=page_num)
-        new_page = output_doc[page_num] # Récupérer la référence à la page copiée
+        new_page = output_doc[page_num]
 
         elements_on_page = self._get_page_text_elements(page_number, layout_data, validated_translations)
-        self.logger.info(f"Page {page_number}: {len(elements_on_page)} éléments traduits à placer.")
+        self.logger.info(f"DEBUG: Page {page_number}: {len(elements_on_page)} éléments traduits trouvés pour placement.")
 
-        # 2. Effacer "chirurgicalement" l'ancien texte en utilisant la rédaction
         for element_layout in elements_on_page:
             original_bbox = fitz.Rect(element_layout['original_bbox'])
-            new_page.add_redact_annot(original_bbox, fill=(1,1,1)) # Remplir avec du blanc
+            new_page.add_redact_annot(original_bbox, fill=(1,1,1))
 
-        # Appliquer toutes les rédactions sur la page en une seule fois
-        new_page.apply_redactions()
+        if elements_on_page:
+            new_page.apply_redactions()
 
-        # 3. Placer le nouveau texte traduit
         for element_layout in elements_on_page:
             try:
                 self._place_translated_text(new_page, element_layout)
@@ -112,7 +107,6 @@ class PDFReconstructor:
 
     def _get_page_text_elements(self, page_number: int, layout_data: Dict[str, Any], validated_translations: Dict[str, Any]) -> List[Dict[str, Any]]:
         layouts = {elem['element_id']: elem for elem in layout_data.get('element_layouts', [])}
-        
         elements_on_page = []
         for elem_id, layout_info in layouts.items():
             if layout_info.get('page_number') == page_number and elem_id in validated_translations['translations']:
@@ -126,28 +120,17 @@ class PDFReconstructor:
         if not translated_text:
             return
 
-        bbox = element_layout['new_bbox']
+        rect = fitz.Rect(element_layout['new_bbox'])
         font_size = element_layout['new_font_size']
-        rect = fitz.Rect(bbox)
-
         font_name = self._determine_font_for_element(element_layout)
         align = self._get_text_alignment(element_layout)
         
-        self.logger.debug(f"Placement de '{translated_text[:30]}...' dans le rect {rect} avec police {font_name} et taille {font_size}")
-
-        rc = page.insert_textbox(
-            rect,
-            translated_text,
-            fontsize=font_size,
-            fontname=font_name,
-            align=align
-        )
+        rc = page.insert_textbox(rect, translated_text, fontsize=font_size, fontname=font_name, align=align)
         if rc < 0:
-            self.logger.warning(f"Le texte pour l'élément {element_layout['element_id']} a peut-être débordé. Code retour: {rc}")
+            self.logger.warning(f"Texte pour l'élément {element_layout['element_id']} a peut-être débordé. Code: {rc}")
 
     def _determine_font_for_element(self, element_layout: Dict[str, Any]) -> str:
         original_font = element_layout.get('original_font_name', 'helv').lower()
-        
         if 'bold' in original_font and ('italic' in original_font or 'oblique' in original_font):
             return "helv-boit"
         if 'bold' in original_font:
