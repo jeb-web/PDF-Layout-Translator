@@ -84,19 +84,26 @@ class PDFReconstructor:
         page_number = page_num + 1
         self.logger.info(f"Traitement de la page {page_number}...")
 
+        # 1. Copier la page originale parfaitement dans le nouveau document
         output_doc.insert_pdf(original_doc, from_page=page_num, to_page=page_num)
-        new_page = output_doc[page_num]
+        new_page = output_doc[page_num] # Récupérer la référence à la page copiée
 
         elements_on_page = self._get_page_text_elements(page_number, layout_data, validated_translations)
+        
+        # --- DÉBUT DE L'AMÉLIORATION DU DÉBOGAGE ---
         self.logger.info(f"DEBUG: Page {page_number}: {len(elements_on_page)} éléments traduits trouvés pour placement.")
+        # --- FIN DE L'AMÉLIORATION DU DÉBOGAGE ---
 
+        # 2. Effacer "chirurgicalement" l'ancien texte en utilisant la rédaction
         for element_layout in elements_on_page:
             original_bbox = fitz.Rect(element_layout['original_bbox'])
-            new_page.add_redact_annot(original_bbox, fill=(1,1,1))
+            new_page.add_redact_annot(original_bbox, fill=(1,1,1)) # Remplir avec du blanc
 
+        # Appliquer toutes les rédactions sur la page en une seule fois (plus efficace)
         if elements_on_page:
             new_page.apply_redactions()
 
+        # 3. Placer le nouveau texte traduit
         for element_layout in elements_on_page:
             try:
                 self._place_translated_text(new_page, element_layout)
@@ -146,3 +153,4 @@ class PDFReconstructor:
         if content_type in ['title', 'subtitle', 'header', 'footer']:
             return fitz.TEXT_ALIGN_CENTER
         return fitz.TEXT_ALIGN_LEFT
+
