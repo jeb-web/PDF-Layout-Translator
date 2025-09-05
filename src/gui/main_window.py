@@ -288,23 +288,40 @@ class MainWindow:
         def thread_target():
             self._set_processing(True, "Lancement de la traduction automatique...")
             try:
-                self.debug_logger.info("Auto-Traduction: Étape 1/3 - Génération du XLIFF en mémoire...")
+                self.debug_logger.info("--- Début du processus de Traduction Automatique ---")
+                
+                self.debug_logger.info("Étape 1/4: Chargement du DOM...")
                 page_objects = self._load_dom_from_file(self.current_session_id, "1_dom_analysis.json")
+                
+                self.debug_logger.info("Étape 2/4: Génération du XLIFF source...")
                 xliff_content = self.text_extractor.create_xliff(page_objects, self.source_lang_var.get(), self.target_lang_var.get())
                 session_dir = self.session_manager.get_session_directory(self.current_session_id)
+                
+                self.debug_logger.info(" -> Écriture du fichier de débogage '2_xliff_to_translate.xliff'...")
                 with open(session_dir / "2_xliff_to_translate.xliff", "w", encoding="utf-8") as f: f.write(xliff_content)
-                self.debug_logger.info("Fichier de débogage '2_xliff_to_translate.xliff' sauvegardé.")
-                self.debug_logger.info("Auto-Traduction: Étape 2/3 - Envoi au service de traduction...")
+                self.debug_logger.info(" -> Fichier sauvegardé.")
+
+                self.debug_logger.info("Étape 3/4: Appel du service de traduction...")
                 translated_xliff = self.auto_translator.translate_xliff_content(xliff_content, self.target_lang_var.get())
+                self.debug_logger.info(f" -> Service de traduction terminé. Type de retour: {type(translated_xliff).__name__}.")
+
+                # BLINDAGE : Vérifier explicitement si le retour est None AVANT d'écrire
+                if translated_xliff is None:
+                    raise ValueError("Le module de traduction a retourné une valeur None inattendue.")
+
+                self.debug_logger.info(" -> Écriture du fichier de débogage '3_xliff_translated.xliff'...")
                 with open(session_dir / "3_xliff_translated.xliff", "w", encoding="utf-8") as f: f.write(translated_xliff)
-                self.debug_logger.info("Fichier de débogage '3_xliff_translated.xliff' sauvegardé.")
-                self.debug_logger.info("Auto-Traduction: Étape 3/3 - Affichage du résultat.")
+                self.debug_logger.info(" -> Fichier sauvegardé.")
+
+                self.debug_logger.info("Étape 4/4: Affichage du résultat dans l'interface.")
                 self.root.after(0, lambda: self.translation_input.delete('1.0', tk.END))
                 self.root.after(0, lambda: self.translation_input.insert('1.0', translated_xliff))
                 self.root.after(0, lambda: messagebox.showinfo("Succès", "Traduction automatique terminée et insérée dans le champ de texte."))
+                self.debug_logger.info("--- Processus de Traduction Automatique terminé avec succès. ---")
+
             except Exception as e:
                 self.logger.error(f"Erreur de traduction automatique: {e}", exc_info=True)
-                self.debug_logger.error(f"ERREUR FATALE pendant la traduction automatique: {e}")
+                self.debug_logger.error(f"--- ERREUR FATALE pendant la traduction automatique ---", exc_info=True)
                 self.root.after(0, lambda e=e: messagebox.showerror("Erreur de Traduction", str(e)))
             finally:
                 self._set_processing(False)
@@ -449,4 +466,5 @@ class ToolTip:
     def hide_tooltip(self, event):
         if self.tooltip_window: self.tooltip_window.destroy()
         self.tooltip_window = None
+
 
