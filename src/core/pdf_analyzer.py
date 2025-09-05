@@ -143,6 +143,10 @@ class PDFAnalyzer:
 
     def _extract_font_info(self, span: Dict[str, Any]) -> FontInfo:
         flags = span.get("flags", 0)
+            
+        # AJOUTER CETTE LIGNE
+        print(f"[DEBUG-ANALYZER-ELEMENT] Police extraite pour un élément de texte : '{span.get('font', 'Unknown')}'")
+    
         return FontInfo(name=span.get("font", "Unknown"), size=span.get("size", 12.0), flags=flags,
             is_bold=bool(flags & 2**4), is_italic=bool(flags & 2**1), is_mono=bool(flags & 2**0),
             encoding=span.get("encoding", "utf-8"))
@@ -170,7 +174,11 @@ class PDFAnalyzer:
                 name = f[3]
                 if name not in fonts: fonts[name] = 0
                 fonts[name] += 1
-        return [{'name': name, 'page_count': count} for name, count in fonts.items()]
+    
+    # AJOUTER CETTE LIGNE
+    print(f"[DEBUG-ANALYZER-LIST] Polices détectées pour la liste globale : {[f[3] for page in self.doc for f in page.get_fonts()]}")
+    
+    return [{'name': name, 'page_count': count} for name, count in fonts.items()]
     
     def _calculate_statistics(self, analysis_result: Dict[str, Any]) -> Dict[str, Any]:
         text_elements = analysis_result['text_elements']
@@ -191,3 +199,4 @@ class PDFAnalyzer:
             'average_words_per_element': total_words / max(1, len(text_elements)),
             'content_type_distribution': content_dist,
         }
+
