@@ -5,7 +5,7 @@ PDF Layout Translator - Moteur de Rendu PDF
 Dessine le DOM finalisé dans un nouveau fichier PDF.
 
 Auteur: L'OréalGPT
-Version: 2.0.3 (Correction de la conversion de couleur et ajout de logs)
+Version: 2.0.2 (Correction de la conversion de couleur)
 """
 import logging
 from pathlib import Path
@@ -17,21 +17,21 @@ from utils.font_manager import FontManager
 class PDFReconstructor:
     def __init__(self, font_manager: FontManager):
         self.logger = logging.getLogger(__name__)
-        self.debug_logger = logging.getLogger('debug_trace') # Logger pour les détails
+        self.debug_logger = logging.getLogger('debug_trace')
+        self.font_manager = font_manager
 
-    # CORRECTION : Fonction de conversion de couleur ajoutée
     def _hex_to_rgb(self, hex_color: str) -> Tuple[float, float, float]:
         """Convertit une couleur hexadécimale (#RRGGBB) en un triplet RGB normalisé (0-1)."""
         hex_color = hex_color.lstrip('#')
         if len(hex_color) == 3: hex_color = "".join([c*2 for c in hex_color])
-        if len(hex_color) != 6: return (0, 0, 0) # Fallback sur le noir
+        if len(hex_color) != 6: return (0, 0, 0)
         try:
             r = int(hex_color[0:2], 16) / 255.0
             g = int(hex_color[2:4], 16) / 255.0
             b = int(hex_color[4:6], 16) / 255.0
             return (r, g, b)
         except ValueError:
-            return (0, 0, 0) # Fallback sur le noir en cas d'erreur
+            return (0, 0, 0)
 
     def render_pages(self, pages: List[PageObject], output_path: Path):
         """Crée un PDF à partir de la liste d'objets PageObject."""
