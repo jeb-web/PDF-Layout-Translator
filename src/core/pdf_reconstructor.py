@@ -44,53 +44,46 @@ class PDFReconstructor:
                 
                 block_bbox = fitz.Rect(block.final_bbox)
                 current_x = block_bbox.x0
-                
-                if not block.spans: continue
-                
-                max_font_size_in_line = block.spans[0].font.size
+                max_font_size_in_line = block.spans[0].font.size if block.spans else 10
                 current_y = block_bbox.y0 + max_font_size_in_line
 
-                all_words = []
                 for span in block.spans:
-                    if span.text:
-                        words = span.text.strip().split(' ')
-                        for i, word in enumerate(words):
-                            all_words.append((word, span))
-                            if i < len(words) - 1:
-                                all_words.append((' ', span))
-
-                if not all_words: continue
-
-                for word, span in all_words:
+                    if not span.text: continue
+                    
                     font_path = self.font_manager.get_replacement_font_path(span.font.name)
                     if not (font_path and font_path.exists()):
-                        self.logger.warning(f"Police non trouvée pour '{span.font.name}', rendu du mot '{word}' ignoré.")
+                        self.logger.warning(f"Police non trouvée pour '{span.font.name}', rendu ignoré.")
                         continue
                     
-                    # On utilise fontname ici car c'est ce que get_text_length attend
-                    word_width = fitz.get_text_length(word, fontname=str(font_path), fontsize=span.font.size)
-                    
-                    if current_x + word_width > block_bbox.x1 and current_x > block_bbox.x0:
-                        current_x = block_bbox.x0
-                        current_y += max_font_size_in_line * 1.2
-                        max_font_size_in_line = span.font.size
-                    
-                    if span.font.size > max_font_size_in_line:
-                         max_font_size_in_line = span.font.size
+                    # Découper le texte du span en mots
+                    words = span.text.strip().split(' ')
+                    for i, word in enumerate(words):
+                        # Ajouter un espace après chaque mot sauf le dernier
+                        word_to_draw = word + (' ' if i < len(words) - 1 else '')
+                        
+                        word_width = fitz.get_text_length(word_to_draw, fontfile=str(font_path), fontsize=span.font.size)
+                        
+                        if current_x + word_width > block_bbox.x1 and current_x > block_bbox.x0:
+                            current_x = block_bbox.x0
+                            current_y += max_font_size_in_line * 1.2
+                            max_font_size_in_line = span.font.size
+                        
+                        if span.font.size > max_font_size_in_line:
+                            max_font_size_in_line = span.font.size
 
-                    if current_y > block_bbox.y1:
-                        self.debug_logger.warning(f"  - Bloc {block.id}: Dépassement de la hauteur. Texte tronqué.")
-                        break
+                        if current_y > block_bbox.y1:
+                            self.debug_logger.warning(f"  - Bloc {block.id}: Dépassement de hauteur.")
+                            break
 
-                    # Et on utilise fontfile ici car c'est ce que insert_text attend
-                    shape.insert_text(
-                        (current_x, current_y),
-                        word,
-                        fontfile=str(font_path),
-                        fontsize=span.font.size,
-                        color=self._hex_to_rgb(span.font.color)
-                    )
-                    current_x += word_width
+                        shape.insert_text(
+                            (current_x, current_y),
+                            word_to_draw,
+                            fontfile=str(font_path),
+                            fontsize=span.font.size,
+                            color=self._hex_to_rgb(span.font.color)
+                        )
+                        current_x += word_width
+                    if current_y > block_bbox.y1: break
                 
                 shape.commit()
 
