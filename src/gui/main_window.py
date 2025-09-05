@@ -5,7 +5,7 @@ PDF Layout Translator - Fenêtre principale
 Interface graphique principale de l'application.
 
 Auteur: L'OréalGPT
-Version: 2.0.1 (Correction des erreurs de scope)
+Version: 2.0.2 (Intégration de la traduction automatique)
 """
 
 import tkinter as tk
@@ -24,6 +24,8 @@ from core.session_manager import SessionManager, SessionStatus
 from core.pdf_analyzer import PDFAnalyzer
 from core.text_extractor import TextExtractor
 from core.translation_parser import TranslationParser
+# NOUVEL IMPORT
+from core.auto_translator import AutoTranslator, GOOGLETRANS_AVAILABLE
 from utils.font_manager import FontManager
 from core.layout_processor import LayoutProcessor
 from core.pdf_reconstructor import PDFReconstructor
@@ -44,6 +46,8 @@ class MainWindow:
         self.pdf_analyzer: Optional[PDFAnalyzer] = None
         self.text_extractor: Optional[TextExtractor] = None
         self.translation_parser: Optional[TranslationParser] = None
+        # NOUVEAU MANAGER
+        self.auto_translator: Optional[AutoTranslator] = None
         self.layout_processor: Optional[LayoutProcessor] = None
         self.pdf_reconstructor: Optional[PDFReconstructor] = None
         
@@ -73,6 +77,8 @@ class MainWindow:
             self.pdf_analyzer = PDFAnalyzer()
             self.text_extractor = TextExtractor()
             self.translation_parser = TranslationParser()
+            # NOUVEAU
+            self.auto_translator = AutoTranslator()
             self.layout_processor = LayoutProcessor(self.font_manager)
             self.pdf_reconstructor = PDFReconstructor(self.font_manager)
             self.logger.info("Gestionnaires de l'architecture v2 initialisés avec succès")
@@ -142,22 +148,36 @@ class MainWindow:
     def _create_translation_tab(self):
         self.translation_frame = ttk.Frame(self.notebook)
         self.notebook.add(self.translation_frame, text="🌐 Traduction")
+        
         instructions_frame = ttk.LabelFrame(self.translation_frame, text="Instructions", padding=20)
         instructions_frame.pack(fill='x', padx=20, pady=20)
-        instructions_text = "1. Cliquez sur 'Générer Fichier de Traduction (XLIFF)' pour créer le fichier à traduire.\n" \
-                            "2. Ouvrez ce fichier avec un éditeur de texte ou un outil de TAO et remplissez les balises <target>.\n" \
-                            "3. Collez le contenu du fichier XLIFF traduit ci-dessous.\n" \
-                            "4. Cliquez sur 'Importer et Valider la Traduction'."
+        instructions_text = "Option 1 (Automatique) : Cliquez sur 'Traduire Automatiquement'.\n" \
+                            "Option 2 (Manuelle) : Cliquez sur 'Générer Fichier XLIFF', traduisez-le, puis collez le résultat ci-dessous.\n\n" \
+                            "Enfin, cliquez sur 'Importer et Valider la Traduction'."
         ttk.Label(instructions_frame, text=instructions_text, justify='left').pack(anchor='w')
-        export_frame = ttk.Frame(self.translation_frame)
-        export_frame.pack(fill='x', padx=20, pady=(0, 20))
-        ttk.Button(export_frame, text="Générer Fichier de Traduction (XLIFF)", command=self._generate_translation_export).pack(side='left')
-        self.open_export_folder_button = ttk.Button(export_frame, text="Ouvrir le dossier", command=self._open_export_folder, state='disabled')
+
+        actions_frame = ttk.Frame(self.translation_frame)
+        actions_frame.pack(fill='x', padx=20, pady=(0, 20))
+        
+        # AJOUT DU BOUTON DE TRADUCTION AUTOMATIQUE
+        self.auto_translate_button = ttk.Button(actions_frame, text="Traduire Automatiquement (Google)", command=self._auto_translate)
+        self.auto_translate_button.pack(side='left', padx=(0, 10))
+
+        ttk.Button(actions_frame, text="Générer Fichier de Traduction (XLIFF)", command=self._generate_translation_export).pack(side='left')
+        self.open_export_folder_button = ttk.Button(actions_frame, text="Ouvrir le dossier", command=self._open_export_folder, state='disabled')
         self.open_export_folder_button.pack(side='left', padx=(10, 0))
+
+        # Gérer la disponibilité de la traduction auto
+        if not GOOGLETRANS_AVAILABLE:
+            self.auto_translate_button.config(state='disabled')
+            # Créer un simple tooltip
+            ToolTip(self.auto_translate_button, "Dépendances manquantes. Installez avec :\npip install googletrans==4.0.0-rc1 lxml")
+
         input_frame = ttk.LabelFrame(self.translation_frame, text="Coller le contenu du XLIFF traduit ici", padding=20)
         input_frame.pack(fill='both', expand=True, padx=20, pady=0)
         self.translation_input = scrolledtext.ScrolledText(input_frame)
         self.translation_input.pack(fill='both', expand=True)
+
         self.validate_translation_button = ttk.Button(self.translation_frame, text="Importer et Valider la Traduction", command=self._validate_translation)
         self.validate_translation_button.pack(padx=20, pady=10)
         self.continue_to_layout_button = ttk.Button(self.translation_frame, text="Continuer vers Mise en Page", command=lambda: self.notebook.select(3), state='disabled')
@@ -237,7 +257,6 @@ class MainWindow:
                 self.root.after(0, self._post_analysis_step, page_objects)
             except Exception as e:
                 self.logger.error(f"Erreur d'analyse: {e}", exc_info=True)
-                # CORRECTION: Capturer 'e' dans le lambda
                 self.root.after(0, lambda e=e: messagebox.showerror("Erreur d'Analyse", str(e)))
             finally:
                 self._set_processing(False)
@@ -247,10 +266,7 @@ class MainWindow:
         total_blocks = sum(len(p.text_blocks) for p in page_objects)
         total_spans = sum(len(b.spans) for p in page_objects for b in p.text_blocks)
         summary = f"Analyse terminée.\n- Pages: {len(page_objects)}\n- Blocs de texte: {total_blocks}\n- Segments de style (spans): {total_spans}"
-        self.analysis_text.config(state='normal')
-        self.analysis_text.delete('1.0', tk.END)
-        self.analysis_text.insert('1.0', summary)
-        self.analysis_text.config(state='disabled')
+        self.analysis_text.config(state='normal'); self.analysis_text.delete('1.0', tk.END); self.analysis_text.insert('1.0', summary); self.analysis_text.config(state='disabled')
         required_fonts = {span.font.name for page in page_objects for block in page.text_blocks for span in block.spans}
         font_report = self.font_manager.check_fonts_availability(list(required_fonts))
         if not font_report['all_available']:
@@ -267,16 +283,40 @@ class MainWindow:
                 session_dir = self.session_manager.get_session_directory(self.current_session_id)
                 export_dir = session_dir / "export"
                 export_dir.mkdir(exist_ok=True)
-                xliff_path = export_dir / "translation.xliff"
-                with open(xliff_path, "w", encoding="utf-8") as f:
+                self.xliff_path = export_dir / "translation.xliff" # Sauvegarder le chemin
+                with open(self.xliff_path, "w", encoding="utf-8") as f:
                     f.write(xliff_content)
                 self._export_folder = export_dir
                 self.root.after(0, lambda: self.open_export_folder_button.config(state='normal'))
                 self.root.after(0, lambda: messagebox.showinfo("Succès", f"Fichier 'translation.xliff' créé dans le dossier de la session."))
             except Exception as e:
                 self.logger.error(f"Erreur d'export XLIFF: {e}", exc_info=True)
-                # CORRECTION: Capturer 'e' dans le lambda
                 self.root.after(0, lambda e=e: messagebox.showerror("Erreur d'Export", str(e)))
+            finally:
+                self._set_processing(False)
+        threading.Thread(target=thread_target, daemon=True).start()
+
+    # NOUVELLE FONCTION POUR LA TRADUCTION AUTOMATIQUE
+    def _auto_translate(self):
+        if not hasattr(self, 'xliff_path') or not self.xliff_path.exists():
+            return messagebox.showwarning("Action requise", "Veuillez d'abord générer le fichier XLIFF avant de lancer la traduction automatique.")
+        
+        def thread_target():
+            self._set_processing(True, "Traduction automatique en cours...")
+            try:
+                with open(self.xliff_path, "r", encoding="utf-8") as f:
+                    xliff_content = f.read()
+
+                translated_xliff = self.auto_translator.translate_xliff_content(xliff_content, self.target_lang_var.get())
+
+                # Mettre à jour le champ de texte dans l'interface
+                self.root.after(0, lambda: self.translation_input.delete('1.0', tk.END))
+                self.root.after(0, lambda: self.translation_input.insert('1.0', translated_xliff))
+                self.root.after(0, lambda: messagebox.showinfo("Succès", "Traduction automatique terminée et insérée dans le champ de texte."))
+
+            except Exception as e:
+                self.logger.error(f"Erreur de traduction automatique: {e}", exc_info=True)
+                self.root.after(0, lambda e=e: messagebox.showerror("Erreur de Traduction", str(e)))
             finally:
                 self._set_processing(False)
         threading.Thread(target=thread_target, daemon=True).start()
@@ -295,7 +335,6 @@ class MainWindow:
                 self.root.after(0, lambda: messagebox.showinfo("Succès", f"{len(translations)} traductions importées avec succès."))
             except Exception as e:
                 self.logger.error(f"Erreur de validation: {e}", exc_info=True)
-                # CORRECTION: Capturer 'e' dans le lambda
                 self.root.after(0, lambda e=e: messagebox.showerror("Erreur de Validation", str(e)))
             finally:
                 self._set_processing(False)
@@ -318,7 +357,6 @@ class MainWindow:
                 self.root.after(0, lambda: self.continue_to_export_button.config(state='normal'))
             except Exception as e:
                 self.logger.error(f"Erreur de mise en page: {e}", exc_info=True)
-                # CORRECTION: Capturer 'e' dans le lambda
                 self.root.after(0, lambda e=e: messagebox.showerror("Erreur de Mise en Page", str(e)))
             finally:
                 self._set_processing(False)
@@ -340,7 +378,6 @@ class MainWindow:
                 self.root.after(0, lambda: messagebox.showinfo("Succès", f"Le PDF final a été exporté avec succès:\n{output_path}"))
             except Exception as e:
                 self.logger.error(f"Erreur d'export PDF: {e}", exc_info=True)
-                # CORRECTION: Capturer 'e' dans le lambda
                 self.root.after(0, lambda e=e: messagebox.showerror("Erreur d'Export", str(e)))
             finally:
                 self._set_processing(False)
@@ -372,3 +409,31 @@ class MainWindow:
 
     def _load_recent_sessions(self): pass
     def _open_selected_session(self): messagebox.showinfo("Info", "La reprise de session sera implémentée dans une future version.")
+
+# CLASSE UTILITAIRE POUR LES TOOLTIPS
+class ToolTip:
+    def __init__(self, widget, text):
+        self.widget = widget
+        self.text = text
+        self.tooltip_window = None
+        widget.bind("<Enter>", self.show_tooltip)
+        widget.bind("<Leave>", self.hide_tooltip)
+
+    def show_tooltip(self, event):
+        if self.tooltip_window or not self.text:
+            return
+        x, y, _, _ = self.widget.bbox("insert")
+        x += self.widget.winfo_rootx() + 25
+        y += self.widget.winfo_rooty() + 25
+        self.tooltip_window = tw = tk.Toplevel(self.widget)
+        tw.wm_overrideredirect(True)
+        tw.wm_geometry(f"+{x}+{y}")
+        label = tk.Label(tw, text=self.text, justify='left',
+                      background="#ffffe0", relief='solid', borderwidth=1,
+                      font=("tahoma", "8", "normal"))
+        label.pack(ipadx=1)
+
+    def hide_tooltip(self, event):
+        if self.tooltip_window:
+            self.tooltip_window.destroy()
+        self.tooltip_window = None
