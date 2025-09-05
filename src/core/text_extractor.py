@@ -15,13 +15,10 @@ class TextExtractor:
         self.logger = logging.getLogger(__name__)
 
     def create_xliff(self, pages: List[PageObject], source_lang: str, target_lang: str) -> str:
-        self.logger.info(f"Création du fichier XLIFF de '{source_lang}' vers '{target_lang}' (Mode Span Stable)")
+        self.logger.info(f"Création du fichier XLIFF de '{source_lang}' vers '{target_lang}'")
         xliff = Element('xliff', attrib={'version': '1.2', 'xmlns': 'urn:oasis:names:tc:xliff:document:1.2'})
         file_elem = SubElement(xliff, 'file', attrib={'source-language': source_lang, 'target-language': target_lang, 'datatype': 'plaintext', 'original': 'pdf-document'})
         body = SubElement(file_elem, 'body')
-        
-        # --- RETOUR À LA LOGIQUE ORIGINALE ET STABLE ---
-        # On traite chaque span individuellement. C'est moins élégant, mais c'est fiable.
         for page in pages:
             for block in page.text_blocks:
                 for span in block.spans:
@@ -33,5 +30,4 @@ class TextExtractor:
         
         xml_str = tostring(xliff, 'utf-8')
         parsed_str = minidom.parseString(xml_str)
-        # Cette fonction retourne TOUJOURS une chaîne de caractères.
         return parsed_str.toprettyxml(indent="  ", encoding="utf-8").decode('utf-8')
