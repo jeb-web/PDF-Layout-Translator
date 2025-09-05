@@ -5,7 +5,7 @@ PDF Layout Translator - Reconstructeur de PDF
 Reconstruction du PDF final avec texte traduit et mise en page ajustée
 
 Auteur: L'OréalGPT
-Version: 1.0.0
+Version: 1.0.3 (Correction de l'embarquement de la police)
 """
 
 import logging
@@ -104,7 +104,6 @@ class PDFReconstructor:
         return elements
     
     def _place_translated_text(self, page, element_layout: Dict[str, Any]):
-        debug_logger = logging.getLogger('debug_trace')
         raw_translated_text = element_layout.get('translated_text', '')
         if not raw_translated_text: return
 
@@ -114,17 +113,18 @@ class PDFReconstructor:
         align = self._get_text_alignment(element_layout)
         original_font_name = element_layout.get('original_font_name', 'Arial')
         
-        # --- LOG POUR DEBUG ---
-        debug_logger.info(f"--- [DEBUG-RECONSTRUCTOR] ---")
-        debug_logger.info(f"[DEBUG-RECONSTRUCTOR] Tentative de remplacement pour la police : '{original_font_name}'")
         font_path = self.font_manager.get_replacement_font_path(original_font_name)
-        debug_logger.info(f"[DEBUG-RECONSTRUCTOR] Résultat de FontManager.get_replacement_font_path : {font_path}")
-        # --- FIN LOG DEBUG ---
         
         if font_path and font_path.exists():
+            # Créer un nom de police unique pour le PDF, basé sur le nom du fichier
+            # C'est la garantie que chaque police personnalisée est unique.
+            font_internal_name = f"F-{font_path.stem.replace(' ', '')}"
+            
+            # CORRECTION FINALE : Ajouter le paramètre 'fontname'
             page.insert_textbox(rect, text_to_render, 
                                      fontsize=font_size, 
                                      fontfile=str(font_path), 
+                                     fontname=font_internal_name, # Le paramètre manquant
                                      align=align)
         else:
             self.logger.warning(f"Aucun fichier de police trouvé pour '{original_font_name}', utilisation de Helvetica.")
