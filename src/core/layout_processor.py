@@ -5,11 +5,10 @@ PDF Layout Translator - Moteur de Mise en Page
 Calcule le "reflow" du texte et ajuste les boîtes de délimitation.
 
 Auteur: L'OréalGPT
-Version: 2.0.5 (Correction des imports de typing)
+Version: 2.0.6 (Logique de calcul simplifiée)
 """
 import logging
-# CORRECTION : Ajout de l'import manquant
-from typing import List, Dict
+from typing import List
 from core.data_model import PageObject
 from utils.font_manager import FontManager
 from fontTools.ttLib import TTFont
@@ -17,12 +16,12 @@ from fontTools.ttLib import TTFont
 class LayoutProcessor:
     def __init__(self, font_manager: FontManager):
         self.logger = logging.getLogger(__name__)
+        self.debug_logger = logging.getLogger('debug_trace')
         self.font_manager = font_manager
         self.font_cache = {}
 
     def _get_font(self, font_name: str):
-        if font_name in self.font_cache:
-            return self.font_cache[font_name]
+        if font_name in self.font_cache: return self.font_cache[font_name]
         font_path = self.font_manager.get_replacement_font_path(font_name)
         if font_path and font_path.exists():
             try:
@@ -35,45 +34,53 @@ class LayoutProcessor:
 
     def _get_text_width(self, text: str, font_name: str, font_size: float) -> float:
         font = self._get_font(font_name)
-        if not font:
-            return len(text) * font_size * 0.6
+        if not font: return len(text) * font_size * 0.6
         cmap = font.getBestCmap()
         glyph_set = font.getGlyphSet()
         total_width = 0
-        for char in text:
-            if ord(char) in cmap:
-                glyph_name = cmap[ord(char)]
-                if glyph_name in glyph_set:
-                    total_width += glyph_set[glyph_name].width
+        if cmap:
+            for char in text:
+                if ord(char) in cmap:
+                    glyph_name = cmap[ord(char)]
+                    if glyph_name in glyph_set:
+                        total_width += glyph_set[glyph_name].width
         return (total_width / font['head'].unitsPerEm) * font_size
 
-    def process_pages(self, pages: List[PageObject], translations: Dict[str, str]) -> List[PageObject]:
-        self.logger.info("Début du traitement de la mise en page (reflow).")
-        for page in pages:
-            for block in page.text_blocks:
-                for span in block.spans:
-                    if span.id in translations:
-                        span.translated_text = translations[span.id]
+    def process_pages(self, pages: List[PageObject]) -> List[PageObject]:
+        """
+        Calcule le reflow pour chaque bloc de texte.
+        Ne reçoit que la "Version à Rendre" avec du texte garanti.
+        """
+        self.debug_logger.info("LayoutProcessor: Démarrage du calcul du reflow.")
         for page in pages:
             for block in page.text_blocks:
                 original_width = block.bbox[2] - block.bbox[0]
-                if original_width <= 0:
+                if original_width <= 0 or not block.spans:
                     block.final_bbox = block.bbox
                     continue
+
                 current_x = 0
-                current_y = block.spans[0].font.size if block.spans else 0
-                line_height_factor = 1.2
+                line_height = block.spans[0].font.size * 1.2
+                current_y = line_height
+                
+                self.debug_logger.info(f"  - Calcul du bloc {block.id} (largeur disponible: {original_width:.2f}pt)")
+                
                 for span in block.spans:
-                    text_to_process = span.translated_text if span.translated_text else span.text
-                    words = text_to_process.split(' ')
+                    # Le texte est déjà finalisé (traduit ou original)
+                    words = span.text.split(' ')
                     for i, word in enumerate(words):
                         word_with_space = word + (' ' if i < len(words) - 1 else '')
                         word_width = self._get_text_width(word_with_space, span.font.name, span.font.size)
+                        
                         if current_x + word_width > original_width and current_x > 0:
                             current_x = 0
-                            current_y += span.font.size * line_height_factor
+                            current_y += line_height
+                        
                         current_x += word_width
+                
                 new_height = current_y
                 block.final_bbox = (block.bbox[0], block.bbox[1], block.bbox[2], block.bbox[1] + new_height)
-        self.logger.info("Traitement de la mise en page terminé.")
+                self.debug_logger.info(f"    -> Nouvelle hauteur calculée: {new_height:.2f}pt. Bbox finale: {block.final_bbox}")
+        
+        self.debug_logger.info("LayoutProcessor: Calcul du reflow terminé.")
         return pages
