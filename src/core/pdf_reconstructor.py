@@ -40,29 +40,24 @@ class PDFReconstructor:
                 if not block.final_bbox or not block.spans:
                     continue
                 
-                # --- CORRECTION DU BUG "Shape" ---
-                # On crée l'objet Shape, on l'utilise, puis on le commit.
                 shape = page.new_shape()
                 
                 block_bbox = fitz.Rect(block.final_bbox)
                 current_x = block_bbox.x0
                 
-                # S'assurer qu'on a des spans avant de continuer
-                if not block.spans:
-                    continue
+                if not block.spans: continue
                 
                 max_font_size_in_line = block.spans[0].font.size
-                current_y = block_bbox.y0 + max_font_size_in_line # Ligne de base de la première ligne
+                current_y = block_bbox.y0 + max_font_size_in_line
 
                 all_words = []
                 for span in block.spans:
-                    # S'assurer que le texte n'est pas None
                     if span.text:
                         words = span.text.strip().split(' ')
                         for i, word in enumerate(words):
                             all_words.append((word, span))
                             if i < len(words) - 1:
-                                all_words.append((' ', span)) # Ajouter les espaces explicitement
+                                all_words.append((' ', span))
 
                 if not all_words: continue
 
@@ -72,9 +67,10 @@ class PDFReconstructor:
                         self.logger.warning(f"Police non trouvée pour '{span.font.name}', rendu du mot '{word}' ignoré.")
                         continue
                     
-                    word_width = fitz.get_text_length(word, fontfile=str(font_path), fontsize=span.font.size)
+                    # On utilise fontname ici car c'est ce que get_text_length attend
+                    word_width = fitz.get_text_length(word, fontname=str(font_path), fontsize=span.font.size)
                     
-                    if current_x + word_width > block_bbox.x1 and current_x > block_bbox.x0 :
+                    if current_x + word_width > block_bbox.x1 and current_x > block_bbox.x0:
                         current_x = block_bbox.x0
                         current_y += max_font_size_in_line * 1.2
                         max_font_size_in_line = span.font.size
@@ -86,7 +82,7 @@ class PDFReconstructor:
                         self.debug_logger.warning(f"  - Bloc {block.id}: Dépassement de la hauteur. Texte tronqué.")
                         break
 
-                    # Utiliser le shape pour insérer le texte
+                    # Et on utilise fontfile ici car c'est ce que insert_text attend
                     shape.insert_text(
                         (current_x, current_y),
                         word,
@@ -96,9 +92,7 @@ class PDFReconstructor:
                     )
                     current_x += word_width
                 
-                # On valide les dessins faits sur le shape
                 shape.commit()
-                # --- FIN DE LA CORRECTION ---
 
         doc.save(output_path, garbage=4, deflate=True)
         doc.close()
