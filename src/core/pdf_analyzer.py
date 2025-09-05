@@ -142,12 +142,14 @@ class PDFAnalyzer:
         }
 
     def _extract_font_info(self, span: Dict[str, Any]) -> FontInfo:
+        debug_logger = logging.getLogger('debug_trace')
         flags = span.get("flags", 0)
         
-        # AJOUT POUR DEBUG
-        print(f"[DEBUG-ANALYZER-ELEMENT] Police extraite pour un élément de texte : '{span.get('font', 'Unknown')}'")
+        # LOG POUR DEBUG
+        font_name = span.get("font", "Unknown")
+        debug_logger.info(f"[DEBUG-ANALYZER-ELEMENT] Police extraite pour un élément de texte : '{font_name}'")
         
-        return FontInfo(name=span.get("font", "Unknown"), size=span.get("size", 12.0), flags=flags,
+        return FontInfo(name=font_name, size=span.get("size", 12.0), flags=flags,
             is_bold=bool(flags & 2**4), is_italic=bool(flags & 2**1), is_mono=bool(flags & 2**0),
             encoding=span.get("encoding", "utf-8"))
 
@@ -168,15 +170,19 @@ class PDFAnalyzer:
         return { i+1: {'dimensions': {'width': p.rect.width, 'height': p.rect.height}} for i, p in enumerate(self.doc) }
     
     def _analyze_fonts(self) -> List[Dict[str, Any]]:
+        debug_logger = logging.getLogger('debug_trace')
         fonts = {}
+        
+        # LOG POUR DEBUG
+        all_font_names = []
         for page in self.doc:
             for f in page.get_fonts():
                 name = f[3]
+                all_font_names.append(name) # Collecter tous les noms, même les doublons
                 if name not in fonts: fonts[name] = 0
                 fonts[name] += 1
         
-        # AJOUT POUR DEBUG
-        print(f"[DEBUG-ANALYZER-LIST] Polices détectées pour la liste globale : {[f[3] for page in self.doc for f in page.get_fonts()]}")
+        debug_logger.info(f"[DEBUG-ANALYZER-LIST] Polices détectées pour la liste globale (brut) : {all_font_names}")
         
         return [{'name': name, 'page_count': count} for name, count in fonts.items()]
     
