@@ -13,42 +13,25 @@ from core.data_model import PageObject
 class TextExtractor:
     def __init__(self):
         self.logger = logging.getLogger(__name__)
-        self.debug_logger = logging.getLogger('debug_trace')
 
     def create_xliff(self, pages: List[PageObject], source_lang: str, target_lang: str) -> str:
-        self.debug_logger.info("="*50)
-        self.debug_logger.info(" DÉBUT DE L'EXTRACTION XLIFF (v1.1 - Mode Bloc) ")
-        self.debug_logger.info("="*50)
-        
+        self.logger.info(f"Création du fichier XLIFF de '{source_lang}' vers '{target_lang}' (Mode Span Stable)")
         xliff = Element('xliff', attrib={'version': '1.2', 'xmlns': 'urn:oasis:names:tc:xliff:document:1.2'})
         file_elem = SubElement(xliff, 'file', attrib={'source-language': source_lang, 'target-language': target_lang, 'datatype': 'plaintext', 'original': 'pdf-document'})
         body = SubElement(file_elem, 'body')
         
+        # --- RETOUR À LA LOGIQUE ORIGINALE ET STABLE ---
+        # On traite chaque span individuellement. C'est moins élégant, mais c'est fiable.
         for page in pages:
-            self.debug_logger.info(f"--- Page {page.page_number} ---")
             for block in page.text_blocks:
-                lines = {}
-                if not block.spans:
-                    self.debug_logger.info(f"  - Bloc {block.id} ignoré (pas de spans).")
-                    continue
-
                 for span in block.spans:
-                    line_key = round(span.bbox[1], 0) 
-                    if line_key not in lines:
-                        lines[line_key] = []
-                    lines[line_key].append(span)
-                
-                sorted_lines_text = []
-                for line_key in sorted(lines.keys()):
-                    sorted_spans = sorted(lines[line_key], key=lambda s: s.bbox[0])
-                    line_text = "".join([s.text for s in sorted_spans])
-                    sorted_lines_text.append(line_text)
-                
-                block_text = "\n".join(sorted_lines_text)
-                
-                if block_text and block_text.strip():
-                    self.debug_logger.info(f"  - Bloc {block.id}: Texte extrait avec {len(sorted_lines_text)} sauts de ligne.")
-                    
-                    # --- CORRECTION DE LA SYNTAXERROR ---
-                    # On ne peut pas utiliser de backslash dans une expression f-string.
-                    # On remplace donc \n par un marqueur visu
+                    if span.text and span.text.strip():
+                        trans_unit = SubElement(body, 'trans-unit', attrib={'id': span.id})
+                        source = SubElement(trans_unit, 'source')
+                        source.text = span.text
+                        SubElement(trans_unit, 'target')
+        
+        xml_str = tostring(xliff, 'utf-8')
+        parsed_str = minidom.parseString(xml_str)
+        # Cette fonction retourne TOUJOURS une chaîne de caractères.
+        return parsed_str.toprettyxml(indent="  ", encoding="utf-8").decode('utf-8')
