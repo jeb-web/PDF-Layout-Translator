@@ -1,8 +1,8 @@
 #!/usr/bin/env python3
-# -*- coding: utf-8 -*-
+# -*- a: utf-8 -*-
 """
 PDF Layout Translator - Moteur de Rendu PDF
-*** VERSION FINALE CORRIGÉE ET ROBUSTE ***
+*** VERSION FINALE - ENTIÈREMENT INSTRUMENTÉE POUR LA TRACE ***
 """
 import logging
 from pathlib import Path
@@ -16,9 +16,7 @@ class PDFReconstructor:
         self.logger = logging.getLogger(__name__)
         self.debug_logger = logging.getLogger('debug_trace')
         self.font_manager = font_manager
-        # --- AJOUT D'UN CACHE DE POLICES ---
-        # C'est la clé de la performance. On ne charge chaque police qu'une seule fois.
-        self.font_cache: Dict[Path, fitz.Font] = {}
+        self.font_ref_cache: Dict[Path, str] = {}
 
     def _hex_to_rgb(self, hex_color: str) -> Tuple[float, float, float]:
         hex_color = hex_color.lstrip('#')
@@ -33,77 +31,72 @@ class PDFReconstructor:
             return (0, 0, 0)
             
     def render_pages(self, pages: List[PageObject], output_path: Path):
-        self.debug_logger.info("--- Début du Rendu PDF (Version Corrigée et Robuste) ---")
+        self.debug_logger.info("="*50)
+        self.debug_logger.info(" NOUVEAU RENDU PDF (AVEC TRACE DÉTAILLÉE) ")
+        self.debug_logger.info("="*50)
         doc = fitz.open()
-        
-        # Vider le cache au début de chaque rendu pour éviter les problèmes de mémoire
-        self.font_cache.clear()
+        self.font_ref_cache.clear()
 
         for page_data in pages:
+            self.debug_logger.info(f"\n--- [PAGE {page_data.page_number}] Début du rendu ---")
             page = doc.new_page(width=page_data.dimensions[0], height=page_data.dimensions[1])
             
             for block in page_data.text_blocks:
-                if not block.final_bbox or not block.spans:
-                    continue
+                self.debug_logger.info(f"  - [BLOC {block.id}] Traitement...")
+                if not block.final_bbox or not block.spans: continue
                 
                 shape = page.new_shape()
-                
                 block_bbox = fitz.Rect(block.final_bbox)
-                
                 if not block.spans: continue
                 
                 max_font_size_in_line = block.spans[0].font.size
                 current_pos = fitz.Point(block_bbox.x0, block_bbox.y0 + max_font_size_in_line)
 
                 for span in block.spans:
-                    if not span.text: continue
+                    if not span.text or not span.text.strip(): continue
                     
+                    self.debug_logger.info(f"    - [SPAN {span.id}] Demande de police pour '{span.font.name}'...")
                     font_path = self.font_manager.get_replacement_font_path(span.font.name)
+                    
                     if not (font_path and font_path.exists()):
-                        self.logger.warning(f"Police non trouvée pour '{span.font.name}', rendu ignoré.")
+                        self.debug_logger.warning(f"      -> ÉCHEC : Police non trouvée pour '{span.font.name}'. Span ignoré.")
                         continue
                     
+                    self.debug_logger.info(f"      -> SUCCÈS : Chemin de police obtenu : '{font_path.name}'")
+
+                    try:
+                        if font_path not in self.font_ref_cache:
+                            self.debug_logger.info(f"        -> [CACHE] Police non trouvée dans le cache. Insertion dans le PDF...")
+                            font_ref = page.insert_font(fontfile=str(font_path), fontname=font_path.stem)
+                            self.font_ref_cache[font_path] = font_ref
+                            self.debug_logger.info(f"          -> Police insérée. Référence obtenue : '{font_ref}'")
+                        
+                        font_ref_name = self.font_ref_cache[font_path]
+                        self.debug_logger.info(f"        -> [CACHE] Utilisation de la référence de police : '{font_ref_name}'")
+                    except Exception as e:
+                        self.logger.error(f"      -> ERREUR CRITIQUE : Impossible d'insérer la police {font_path} dans le PDF: {e}")
+                        continue
+
                     words = span.text.strip().split(' ')
                     for i, word in enumerate(words):
                         word_to_draw = word + (' ' if i < len(words) - 1 else '')
                         
-                        # --- BLOC DE CORRECTION MAJEUR ---
-                        # La seule méthode correcte et validée pour mesurer la largeur du texte
-                        # avec une police externe est d'utiliser un objet fitz.Font.
-                        if font_path not in self.font_cache:
-                            try:
-                                # Opération coûteuse, effectuée une seule fois par police grâce au cache.
-                                self.font_cache[font_path] = fitz.Font(fontfile=str(font_path))
-                                self.debug_logger.info(f"Police '{font_path.name}' chargée et mise en cache.")
-                            except Exception as e:
-                                self.logger.error(f"Impossible de charger la police {font_path}: {e}. Le texte utilisant cette police sera ignoré.")
-                                # On place un objet None dans le cache pour ne pas retenter
-                                self.font_cache[font_path] = None 
-                                continue
-                        
-                        font = self.font_cache[font_path]
-                        if font is None: # Si le chargement a échoué précédemment
-                            continue
-
-                        word_width = font.text_length(word_to_draw, fontsize=span.font.size)
-                        # --- FIN DU BLOC DE CORRECTION ---
+                        word_width = fitz.get_text_length(word_to_draw, fontname=font_ref_name, fontsize=span.font.size)
                         
                         if current_pos.x + word_width > block_bbox.x1 and current_pos.x > block_bbox.x0:
                             current_pos.x = block_bbox.x0
                             current_pos.y += max_font_size_in_line * 1.2
                             max_font_size_in_line = span.font.size
                         
-                        if span.font.size > max_font_size_in_line:
-                            max_font_size_in_line = span.font.size
+                        if span.font.size > max_font_size_in_line: max_font_size_in_line = span.font.size
+                        if current_pos.y > block_bbox.y1 + 5: break
 
-                        if current_pos.y > block_bbox.y1 + 5:
-                            break
-
-                        # insert_text UTILISE 'fontfile', ce qui était déjà correct.
+                        # La trace de preuve finale
+                        self.debug_logger.info(f"          -> [DESSIN] Mot: '{word_to_draw}', Police: '{font_ref_name}', Taille: {span.font.size}")
                         shape.insert_text(
                             current_pos,
                             word_to_draw,
-                            fontfile=str(font_path),
+                            fontname=font_ref_name,
                             fontsize=span.font.size,
                             color=self._hex_to_rgb(span.font.color)
                         )
@@ -113,6 +106,7 @@ class PDFReconstructor:
                 
                 shape.commit()
 
+        self.debug_logger.info("\n--- Fin du rendu ---")
         doc.save(output_path, garbage=4, deflate=True)
         doc.close()
-        self.debug_logger.info(f"--- Rendu PDF (Version Corrigée et Robuste) Terminé. ---")
+        self.debug_logger.info(f"PDF final sauvegardé dans : {output_path}")
