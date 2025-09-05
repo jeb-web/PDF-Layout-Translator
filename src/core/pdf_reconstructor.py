@@ -2,7 +2,7 @@
 # -*- coding: utf-8 -*-
 """
 PDF Layout Translator - Moteur de Rendu PDF
-*** VERSION FINALE - Rendu Span par Span (Corrigé) ***
+*** VERSION FINALE - Simple et Robuste ***
 """
 import logging
 from pathlib import Path
@@ -30,7 +30,7 @@ class PDFReconstructor:
             return (0, 0, 0)
             
     def render_pages(self, pages: List[PageObject], output_path: Path):
-        self.debug_logger.info("--- Début du Rendu PDF (Mode Span-par-Span Corrigé) ---")
+        self.debug_logger.info("--- Début du Rendu PDF (Mode Simple et Robuste) ---")
         doc = fitz.open()
         
         for page_data in pages:
@@ -39,54 +39,34 @@ class PDFReconstructor:
             for block in page_data.text_blocks:
                 if not block.final_bbox or not block.spans:
                     continue
-                
-                shape = page.new_shape()
-                
-                block_bbox = fitz.Rect(block.final_bbox)
-                current_x = block_bbox.x0
-                max_font_size_in_line = block.spans[0].font.size if block.spans else 10
-                current_y = block_bbox.y0 + max_font_size_in_line
 
-                for span in block.spans:
-                    if not span.text: continue
-                    
-                    font_path = self.font_manager.get_replacement_font_path(span.font.name)
-                    if not (font_path and font_path.exists()):
-                        self.logger.warning(f"Police non trouvée pour '{span.font.name}', rendu ignoré.")
-                        continue
-                    
-                    # Découper le texte du span en mots
-                    words = span.text.strip().split(' ')
-                    for i, word in enumerate(words):
-                        # Ajouter un espace après chaque mot sauf le dernier
-                        word_to_draw = word + (' ' if i < len(words) - 1 else '')
-                        
-                        word_width = fitz.get_text_length(word_to_draw, fontfile=str(font_path), fontsize=span.font.size)
-                        
-                        if current_x + word_width > block_bbox.x1 and current_x > block_bbox.x0:
-                            current_x = block_bbox.x0
-                            current_y += max_font_size_in_line * 1.2
-                            max_font_size_in_line = span.font.size
-                        
-                        if span.font.size > max_font_size_in_line:
-                            max_font_size_in_line = span.font.size
-
-                        if current_y > block_bbox.y1:
-                            self.debug_logger.warning(f"  - Bloc {block.id}: Dépassement de hauteur.")
-                            break
-
-                        shape.insert_text(
-                            (current_x, current_y),
-                            word_to_draw,
-                            fontfile=str(font_path),
-                            fontsize=span.font.size,
-                            color=self._hex_to_rgb(span.font.color)
-                        )
-                        current_x += word_width
-                    if current_y > block_bbox.y1: break
+                # On assemble le texte correctement, avec des espaces.
+                full_text = " ".join([s.text.strip() for s in block.spans if s.text])
                 
-                shape.commit()
+                # On utilise le style du premier span comme style principal pour le bloc.
+                # C'est une simplification, mais elle évitera les bugs.
+                main_span = block.spans[0]
+                font_path = self.font_manager.get_replacement_font_path(main_span.font.name)
+                font_size = main_span.font.size
+                color_rgb = self._hex_to_rgb(main_span.font.color)
+
+                if not font_path or not font_path.exists():
+                    self.logger.warning(f"Police de remplacement non trouvée pour '{main_span.font.name}', bloc {block.id} ignoré.")
+                    continue
+                
+                try:
+                    # On utilise la fonction la plus simple et la plus fiable : insert_textbox
+                    page.insert_textbox(
+                        block.final_bbox,
+                        full_text,
+                        fontsize=font_size,
+                        fontfile=str(font_path),
+                        color=color_rgb,
+                        align=fitz.TEXT_ALIGN_LEFT
+                    )
+                except Exception as e:
+                    self.logger.error(f"Erreur d'insertion pour le bloc {block.id}: {e}")
 
         doc.save(output_path, garbage=4, deflate=True)
         doc.close()
-        self.debug_logger.info(f"--- Rendu PDF (Mode Span-par-Span Corrigé) Terminé. ---")
+        self.debug_logger.info(f"--- Rendu PDF (Mode Simple et Robuste) Terminé. ---")
