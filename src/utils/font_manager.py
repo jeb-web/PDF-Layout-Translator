@@ -2,7 +2,7 @@
 # -*- coding: utf-8 -*-
 """
 PDF Layout Translator - Gestionnaire de polices
-*** VERSION FINALE - Logique simple et robuste ***
+*** VERSION FINALE - CORRECTION DU TYPAGE DE CHEMIN DE FICHIER ***
 """
 import os
 import logging
@@ -66,12 +66,15 @@ class FontManager:
 
     def _process_font_file(self, font_path: Path):
         try:
-            font_collection = TTFont(font_path, lazy=True)
+            # --- CORRECTION DU BUG LATENT ---
+            # On convertit le chemin en chaîne de caractères AVANT d'appeler .lower()
             if 'ttc' in str(font_path).lower():
+                 font_collection = TTFont(font_path, lazy=True)
                  for i in range(len(font_collection.reader.fonts)):
                     font = TTFont(font_path, fontNumber=i, lazy=True)
                     self._add_font_from_metadata(font, font_path)
             else:
+                font_collection = TTFont(font_path, lazy=True)
                 self._add_font_from_metadata(font_collection, font_path)
         except (TTLibError, Exception): pass
 
@@ -80,14 +83,13 @@ class FontManager:
         if not name_table: return
         
         full_name = name_table.getBestFullName()
-        if full_name and full_name not in self.system_fonts:
+        if full_name and isinstance(full_name, str) and full_name not in self.system_fonts:
             self.system_fonts[full_name] = font_path
 
-        # Ajouter aussi le nom PostScript (souvent utilisé dans les PDF)
         postscript_name = name_table.getName(6, 3, 1)
         if postscript_name:
             ps_name = postscript_name.toUnicode()
-            if ps_name not in self.system_fonts:
+            if ps_name and isinstance(ps_name, str) and ps_name not in self.system_fonts:
                 self.system_fonts[ps_name] = font_path
 
     def get_all_available_fonts(self) -> List[str]:
@@ -106,22 +108,17 @@ class FontManager:
         return self.font_mappings.get(original_font)
 
     def get_replacement_font_path(self, original_font_name: str) -> Optional[Path]:
-        # 1. Tenter le mapping utilisateur
         mapped_name = self.font_mappings.get(original_font_name)
-        if mapped_name and mapped_name in self.system_fonts:
-            return self.system_fonts[mapped_name]
+        if mapped_name:
+            if mapped_name in self.system_fonts:
+                return self.system_fonts[mapped_name]
+            else:
+                self.logger.warning(f"Le mapping pour '{original_font_name}' pointe vers une police non trouvée : '{mapped_name}'.")
 
-        # 2. Tenter le nom original
         if original_font_name in self.system_fonts:
             return self.system_fonts[original_font_name]
 
-        # 3. Fallback sur Arial
-        if "Arial" in self.system_fonts:
-            return self.system_fonts["Arial"]
-        
-        # 4. Fallback ultime
-        if self.system_fonts:
-            return next(iter(self.system_fonts.values()))
+        self.logger.warning(f"Aucune police de remplacement valide trouvée pour '{original_font_name}'. Le texte sera ignoré.")
         return None
 
     def _load_font_mappings(self):
