@@ -104,6 +104,7 @@ class PDFReconstructor:
         return elements
     
     def _place_translated_text(self, page, element_layout: Dict[str, Any]):
+        debug_logger = logging.getLogger('debug_trace')
         raw_translated_text = element_layout.get('translated_text', '')
         if not raw_translated_text: return
 
@@ -113,21 +114,19 @@ class PDFReconstructor:
         align = self._get_text_alignment(element_layout)
         original_font_name = element_layout.get('original_font_name', 'Arial')
         
-        # --- AJOUT POUR DEBUG ---
-        print(f"--- [DEBUG-RECONSTRUCTOR] ---")
-        print(f"[DEBUG-RECONSTRUCTOR] Tentative de remplacement pour la police : '{original_font_name}'")
+        # --- LOG POUR DEBUG ---
+        debug_logger.info(f"--- [DEBUG-RECONSTRUCTOR] ---")
+        debug_logger.info(f"[DEBUG-RECONSTRUCTOR] Tentative de remplacement pour la police : '{original_font_name}'")
         font_path = self.font_manager.get_replacement_font_path(original_font_name)
-        print(f"[DEBUG-RECONSTRUCTOR] Résultat de FontManager.get_replacement_font_path : {font_path}")
-        # --- FIN AJOUT DEBUG ---
+        debug_logger.info(f"[DEBUG-RECONSTRUCTOR] Résultat de FontManager.get_replacement_font_path : {font_path}")
+        # --- FIN LOG DEBUG ---
         
-        # --- MODIFICATION MAJEURE : Le reconstructeur obéit au FontManager ---
         if font_path and font_path.exists():
             page.insert_textbox(rect, text_to_render, 
                                      fontsize=font_size, 
                                      fontfile=str(font_path), 
                                      align=align)
         else:
-            # Fallback si le FontManager ne trouve rien (ne devrait pas arriver avec la nouvelle logique)
             self.logger.warning(f"Aucun fichier de police trouvé pour '{original_font_name}', utilisation de Helvetica.")
             page.insert_textbox(rect, text_to_render, 
                                      fontsize=font_size, 
