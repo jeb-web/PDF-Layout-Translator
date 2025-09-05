@@ -1,10 +1,4 @@
-# Dépendances de production pour PDF-Layout-Translator
-# Ce fichier est généré pour la compatibilité. La source de vérité est setup.py.
-
 PyMuPDF>=1.23.14
-reportlab>=4.0.7
 fonttools>=4.47.0
-pillow>=10.1.0
-regex>=2023.10.3
 lxml>=4.9.3
 googletrans==4.0.0-rc1
