@@ -1,11 +1,11 @@
-#!/usr/bin/env python3
+#!/usr/-bin/env python3
 # -*- coding: utf-8 -*-
 """
 PDF Layout Translator - Module de Traduction Automatique
 Utilise des services externes pour traduire le contenu d'un fichier XLIFF.
 
 Auteur: L'OréalGPT
-Version: 2.0.2 (Correction du parsing XLIFF et ajout de logs)
+Version: 2.0.3 (Correction du parsing XLIFF)
 """
 
 import logging
@@ -24,8 +24,6 @@ class AutoTranslator:
     
     def __init__(self):
         self.logger = logging.getLogger(__name__)
-        # Initialiser le logger de debug pour une trace détaillée
-        self.debug_logger = logging.getLogger('debug_trace')
         if GOOGLETRANS_AVAILABLE:
             self.translator = Translator()
         else:
@@ -43,8 +41,7 @@ class AutoTranslator:
         if not self.is_available():
             raise RuntimeError("La bibliothèque 'googletrans' n'est pas installée. La traduction automatique est désactivée.")
 
-        self.debug_logger.info("--- Début de la Traduction Automatique ---")
-        self.debug_logger.info(f"Langue cible demandée : '{target_lang}'")
+        self.logger.info(f"Début de la traduction automatique vers '{target_lang}'...")
         
         # lxml nécessite des bytes pour le parsing, donc on encode
         parser = etree.XMLParser(remove_blank_text=True)
@@ -53,10 +50,10 @@ class AutoTranslator:
         # Le namespace est crucial pour que lxml trouve les balises
         ns = {'xliff': 'urn:oasis:names:tc:xliff:document:1.2'}
         
-        # CORRECTION BUG N°2 : Utiliser xpath pour trouver les bonnes balises
+        # CORRECTION : Utiliser xpath avec le namespace pour trouver les bonnes balises
         trans_units = root.xpath("//xliff:trans-unit", namespaces=ns)
         total_units = len(trans_units)
-        self.debug_logger.info(f"Nombre total de segments à traduire trouvés : {total_units}")
+        self.logger.info(f"{total_units} segments à traduire trouvés.")
         
         translated_count = 0
         failed_count = 0
@@ -65,14 +62,10 @@ class AutoTranslator:
             source = unit.find("xliff:source", namespaces=ns)
             target = unit.find("xliff:target", namespaces=ns)
             
-            # Vérifier que le segment source existe et a du texte
             if source is not None and source.text and source.text.strip():
                 source_text = source.text
-                self.debug_logger.info(f"  > Traitement du segment {i+1}/{total_units} (ID: {unit.get('id')}): '{source_text[:50]}...'")
                 try:
-                    # Ajout d'une petite pause pour éviter de se faire bloquer par Google
-                    if i > 0 and i % 15 == 0:
-                        self.debug_logger.info("  ... Pause de 0.5s pour éviter le blocage de l'API...")
+                    if i > 0 and i % 10 == 0:
                         sleep(0.5)
 
                     translated_text = self.translator.translate(source_text, dest=target_lang).text
@@ -80,22 +73,14 @@ class AutoTranslator:
                         target = etree.SubElement(unit, "target")
                     target.text = translated_text
                     translated_count += 1
-                    self.debug_logger.info(f"    Succès -> '{translated_text[:50]}...'")
-
                 except Exception as e:
-                    self.logger.warning(f"Échec de la traduction pour le segment '{source_text[:30]}...': {e}. Le texte source sera conservé.")
-                    self.debug_logger.warning(f"    Échec ! Erreur: {e}. Conservation du texte source.")
+                    self.logger.warning(f"Échec de la traduction pour '{source_text[:30]}...': {e}. Le texte source sera conservé.")
                     failed_count += 1
-                    # En cas d'erreur, on copie le texte source dans la cible
                     if target is None:
                         target = etree.SubElement(unit, "target")
                     target.text = source_text
             elif target is None:
-                # S'il n'y a pas de source, créer une cible vide pour garder le fichier valide
                 etree.SubElement(unit, "target")
 
-        self.debug_logger.info("--- Fin de la Traduction Automatique ---")
-        self.debug_logger.info(f"Résumé : {translated_count} segments traduits, {failed_count} échecs (texte source conservé).")
-        
-        # Re-convertir l'arbre lxml en une chaîne de caractères formatée
+        self.logger.info(f"Traduction automatique terminée : {translated_count} succès, {failed_count} échecs.")
         return etree.tostring(root, pretty_print=True, encoding='utf-8', xml_declaration=True).decode('utf-8')
