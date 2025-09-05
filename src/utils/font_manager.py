@@ -2,7 +2,7 @@
 # -*- coding: utf-8 -*-
 """
 PDF Layout Translator - Gestionnaire de polices
-*** VERSION FINALE - Logique simple et directe ***
+*** VERSION FINALE - Logique simple et robuste ***
 """
 import os
 import logging
@@ -83,6 +83,13 @@ class FontManager:
         if full_name and full_name not in self.system_fonts:
             self.system_fonts[full_name] = font_path
 
+        # Ajouter aussi le nom PostScript (souvent utilisé dans les PDF)
+        postscript_name = name_table.getName(6, 3, 1)
+        if postscript_name:
+            ps_name = postscript_name.toUnicode()
+            if ps_name not in self.system_fonts:
+                self.system_fonts[ps_name] = font_path
+
     def get_all_available_fonts(self) -> List[str]:
         return sorted(list(self.system_fonts.keys()))
 
@@ -124,8 +131,6 @@ class FontManager:
                     data = json.load(f)
                     if isinstance(data, dict):
                         self.font_mappings = data
-                    else: # Gérer le cas où le fichier est corrompu avec une liste
-                        self.font_mappings = {}
             except Exception: self.font_mappings = {}
 
     def _save_font_mappings(self):
