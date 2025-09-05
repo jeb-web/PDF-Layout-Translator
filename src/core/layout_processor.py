@@ -5,12 +5,13 @@ PDF Layout Translator - Moteur de Mise en Page
 Calcule le "reflow" du texte et ajuste les boîtes de délimitation.
 
 Auteur: L'OréalGPT
-Version: 2.0.0
+Version: 2.0.1 (Correction des imports)
 """
 import logging
 from typing import List, Dict, Tuple
-from .data_model import PageObject
-from ..utils.font_manager import FontManager
+# CORRECTION: Import absolu depuis la racine 'src'
+from core.data_model import PageObject
+from utils.font_manager import FontManager
 from fontTools.ttLib import TTFont
 
 class LayoutProcessor:
@@ -46,7 +47,8 @@ class LayoutProcessor:
         for char in text:
             if ord(char) in cmap:
                 glyph_name = cmap[ord(char)]
-                total_width += glyph_set[glyph_name].width
+                if glyph_name in glyph_set:
+                    total_width += glyph_set[glyph_name].width
         
         return (total_width / font['head'].unitsPerEm) * font_size
 
@@ -63,13 +65,17 @@ class LayoutProcessor:
 
         # Étape 2: Calculer le reflow pour chaque bloc
         for page in pages:
-            for block in block.spans:
+            for block in page.text_blocks:
                 # Cette partie est très complexe et nécessite un algorithme de reflow complet.
                 # Pour cette phase, nous allons adopter une stratégie simple :
                 # - On calcule la nouvelle hauteur nécessaire.
                 # - On met à jour la bbox finale.
                 
                 original_width = block.bbox[2] - block.bbox[0]
+                if original_width <= 0:
+                    block.final_bbox = block.bbox
+                    continue
+
                 current_x = 0
                 current_y = block.spans[0].font.size if block.spans else 0
                 line_height_factor = 1.2
@@ -78,18 +84,19 @@ class LayoutProcessor:
                     text_to_process = span.translated_text if span.translated_text else span.text
                     words = text_to_process.split(' ')
                     
-                    for word in words:
-                        word_width = self._get_text_width(word + ' ', span.font.name, span.font.size)
-                        if current_x + word_width > original_width:
+                    for i, word in enumerate(words):
+                        # Ajouter un espace sauf pour le dernier mot d'un span
+                        word_with_space = word + (' ' if i < len(words) - 1 else '')
+                        word_width = self._get_text_width(word_with_space, span.font.name, span.font.size)
+                        
+                        if current_x + word_width > original_width and current_x > 0:
                             current_x = 0
                             current_y += span.font.size * line_height_factor
+                        
                         current_x += word_width
                 
                 new_height = current_y
                 block.final_bbox = (block.bbox[0], block.bbox[1], block.bbox[2], block.bbox[1] + new_height)
         
-        # Étape 3: Gérer les superpositions (simplifié pour l'instant)
-        # Dans une future phase, nous décalerions les blocs vers le bas.
-
         self.logger.info("Traitement de la mise en page terminé.")
         return pages
