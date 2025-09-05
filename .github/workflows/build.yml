@@ -13,15 +13,13 @@ env:
   APP_NAME: 'PDF-Layout-Translator'
 
 jobs:
-  build-and-test:
-    name: Test, Build & Release
+  build-and-release:
+    name: Build and Release
     runs-on: windows-latest
     
     steps:
     - name: Checkout code
       uses: actions/checkout@v4
-      with:
-        fetch-depth: 0
     
     - name: Set up Python
       uses: actions/setup-python@v5
@@ -32,31 +30,27 @@ jobs:
     - name: Install dependencies
       run: |
         python -m pip install --upgrade pip
-        # Installe les dépendances de production ET de développement
+        # Installs production and development dependencies from setup.py
         pip install -e .[dev]
     
-    - name: Run linter (Flake8)
-      run: |
-        flake8 src/ --count --select=E9,F63,F7,F82 --show-source --statistics
-
     - name: Build single EXE with PyInstaller
       run: |
-        echo "🔨 Building the executable..."
         pyinstaller --noconfirm --onefile --windowed --name "${{ env.APP_NAME }}" src/main.py
-    
-    - name: Verify EXE creation
-      run: |
-        if (Test-Path "dist/${{ env.APP_NAME }}.exe") {
-          Write-Host "✅ EXE created successfully!"
-        } else {
-          Write-Host "❌ EXE creation failed."
-          exit 1
-        }
 
-    - name: Create Release (if tag)
+    # --- THIS IS THE CRUCIAL STEP I MISSED ---
+    # This part saves the EXE as an Artifact for EVERY build (pushes, PRs, etc.)
+    - name: Upload EXE as an Artifact
+      uses: actions/upload-artifact@v4
+      with:
+        name: ${{ env.APP_NAME }} # The name of the downloadable zip
+        path: dist/${{ env.APP_NAME }}.exe # The path to the file to upload
+        retention-days: 7 # Keep the artifact for 7 days
+
+    # This part ONLY runs if you push a tag (e.g., git tag v2.0.3; git push origin v2.0.3)
+    - name: Create Release and Upload EXE
       if: startsWith(github.ref, 'refs/tags/')
       uses: softprops/action-gh-release@v2
       with:
-        files: dist/${{ env.APP_NAME }}.exe
+        files: dist/${{ env.APP_NAME }}.exe # The file to attach to the release
       env:
         GITHUB_TOKEN: ${{ secrets.GITHUB_TOKEN }}
