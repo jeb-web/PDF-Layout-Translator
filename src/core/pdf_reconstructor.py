@@ -2,7 +2,7 @@
 # -*- a: utf-8 -*-
 """
 PDF Layout Translator - Moteur de Rendu PDF
-*** VERSION DÉFINITIVE - LOGIQUE DE CHARGEMENT DE POLICE UNIFIÉE ***
+*** VERSION DÉFINITIVE - CORRECTION DE LA GESTION DES RESSOURCES DE PAGE ***
 """
 import logging
 from pathlib import Path
@@ -16,8 +16,8 @@ class PDFReconstructor:
         self.logger = logging.getLogger(__name__)
         self.debug_logger = logging.getLogger('debug_trace')
         self.font_manager = font_manager
+        # Cache pour les OBJETS Font, utilisés pour la MESURE. C'est le seul cache nécessaire.
         self.font_object_cache: Dict[Path, fitz.Font] = {}
-        self.font_ref_cache: Dict[Path, str] = {}
 
     def _hex_to_rgb(self, hex_color: str) -> Tuple[float, float, float]:
         hex_color = hex_color.lstrip('#')
@@ -31,8 +31,8 @@ class PDFReconstructor:
     def render_pages(self, pages: List[PageObject], output_path: Path):
         self.debug_logger.info("="*50); self.debug_logger.info(" NOUVEAU RENDU PDF (VERSION DÉFINITIVE) "); self.debug_logger.info("="*50)
         doc = fitz.open()
+        # On ne vide que le cache des objets Font.
         self.font_object_cache.clear()
-        self.font_ref_cache.clear()
 
         for page_data in pages:
             self.debug_logger.info(f"\n--- [PAGE {page_data.page_number}] ---")
@@ -55,24 +55,20 @@ class PDFReconstructor:
                     if not (font_path and font_path.exists()): continue
                     
                     try:
-                        # --- ÉTAPE 1: PRÉPARATION DE LA MESURE (MÉTHODE UNIFIÉE) ---
+                        # --- ÉTAPE 1: PRÉPARATION DE LA MESURE (via cache d'objets) ---
                         if font_path not in self.font_object_cache:
-                            self.debug_logger.info(f"    - [SPAN {span.id}] Chargement de l'objet Font depuis '{font_path.name}'...")
                             font_buffer = font_path.read_bytes()
                             self.font_object_cache[font_path] = fitz.Font(fontbuffer=font_buffer)
-                            self.debug_logger.info(f"      -> Objet Font créé et mis en cache.")
                         font_object = self.font_object_cache[font_path]
 
-                        # --- ÉTAPE 2: PRÉPARATION DU DESSIN ---
-                        if font_path not in self.font_ref_cache:
-                            self.debug_logger.info(f"    - [SPAN {span.id}] Insertion de la police '{font_path.name}' dans le PDF...")
-                            font_ref = page.insert_font(fontfile=str(font_path), fontname=font_path.stem)
-                            self.font_ref_cache[font_path] = str(font_ref)
-                            self.debug_logger.info(f"      -> Police insérée. Réf. Dessin : '{self.font_ref_cache[font_path]}'")
-                        font_ref_name = self.font_ref_cache[font_path]
+                        # --- ÉTAPE 2: PRÉPARATION DU DESSIN (insertion directe, pas de cache de référence) ---
+                        # On insère la police pour chaque span. PyMuPDF gère l'optimisation en interne.
+                        # C'est la seule approche qui garantit que la référence est valide pour la PAGE ACTUELLE.
+                        font_ref_name = page.insert_font(fontfile=str(font_path), fontname=font_path.stem)
+                        self.debug_logger.info(f"    - [SPAN {span.id}] Police '{font_path.name}' insérée sur la page. Réf: '{font_ref_name}'")
 
                     except Exception as e:
-                        self.logger.error(f"Erreur critique de préparation de la police {font_path.name} pour le span {span.id}: {e}", exc_info=True)
+                        self.logger.error(f"Erreur de préparation de la police {font_path.name} pour le span {span.id}: {e}", exc_info=True)
                         continue
 
                     words = span.text.strip().split(' ')
@@ -90,7 +86,8 @@ class PDFReconstructor:
 
                         shape.insert_text(
                             current_pos, word_to_draw,
-                            fontname=font_ref_name, fontsize=span.font.size,
+                            fontname=str(font_ref_name), # On s'assure que c'est une string
+                            fontsize=span.font.size,
                             color=self._hex_to_rgb(span.font.color)
                         )
                         current_pos.x += word_width
