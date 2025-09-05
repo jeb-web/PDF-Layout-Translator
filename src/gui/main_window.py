@@ -800,3 +800,35 @@ class MainWindow:
                  self._update_global_progress(4, "Prêt pour la mise en page")
             
             elif status in [SessionStatus.READY_FOR_EXPORT, SessionStatus.COMPLETED]:
+                 layout_result_path = session_dir / "layout_result.json"
+                 if layout_result_path.exists():
+                     with open(layout_result_path, 'r', encoding='utf-8') as f:
+                         self._display_layout_results(json.load(f))
+                 self.notebook.select(4) # Aller à l'onglet Export
+                 self._update_global_progress(5, "Prêt pour l'export")
+                 self._set_suggested_output_filename() # Suggérer le nom de fichier
+            
+            else: # Pour les statuts CREATED, ANALYZING, ou ERROR
+                self.notebook.select(1) # Aller à l'onglet Analyse par défaut
+        except Exception as e:
+            self.logger.error(f"Erreur lors de la reprise de session: {e}")
+            messagebox.showerror("Erreur de Reprise", f"Impossible de restaurer l'état de la session: {e}")
+            self.notebook.select(0)
+        # --- FIN DE LA LOGIQUE DE REPRISE DE SESSION ---
+
+    def _delete_selected_session(self):
+        selection = self.sessions_tree.selection()
+        if not selection: return
+        
+        if messagebox.askyesno("Confirmation", "Supprimer cette session ?"):
+            item = self.sessions_tree.item(selection[0])
+            session_id = item['tags'][0]
+            
+            if session_id and self.session_manager.delete_session(session_id):
+                self._load_recent_sessions()
+            else:
+                messagebox.showerror("Erreur", "Impossible de supprimer la session.")
+
+    def _preview_layout(self):
+        messagebox.showinfo("Info", "Pas encore implémenté")
+
