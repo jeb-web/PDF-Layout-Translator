@@ -7,23 +7,14 @@ on:
   pull_request:
     branches: [ main ]
   workflow_dispatch:
-    inputs:
-      create_release:
-        description: 'Create a release'
-        required: false
-        default: false
-        type: boolean
 
 env:
   PYTHON_VERSION: '3.11'
   APP_NAME: 'PDF-Layout-Translator'
 
 jobs:
-  # =====================================================
-  # Tests rapides
-  # =====================================================
-  test:
-    name: Quick Tests
+  build-and-test:
+    name: Test, Build & Release
     runs-on: windows-latest
     
     steps:
@@ -38,314 +29,34 @@ jobs:
         python-version: ${{ env.PYTHON_VERSION }}
         cache: 'pip'
     
-    - name: Get version
-      id: version
-      shell: bash
-      run: |
-        GIT_DESCRIBE=$(git describe --tags --always 2>/dev/null || echo "0.0.0-dev")
-        if [[ $GITHUB_REF == refs/tags/v* ]]; then
-            VERSION=${GITHUB_REF#refs/tags/v}
-        elif [[ "$GIT_DESCRIBE" == *"-"* && "$GIT_DESCRIBE" == *"g"* ]]; then
-            VERSION_NO_V=${GIT_DESCRIBE#v}
-            IFS='-' read -ra PARTS <<< "$VERSION_NO_V"
-            VERSION="${PARTS[0]}.post${PARTS[1]}+${PARTS[2]}"
-        else
-            HASH=${GIT_DESCRIBE}
-            VERSION="0.0.1.dev0+g${HASH}"
-        fi
-        echo "version=$VERSION" >> $GITHUB_OUTPUT
-        echo "📋 Version: $VERSION"
-
-    - name: Create version file
-      run: |
-        echo "__version__ = '${{ steps.version.outputs.version }}'" > src/__version__.py
-
     - name: Install dependencies
       run: |
         python -m pip install --upgrade pip
+        # Installe les dépendances de production ET de développement
         pip install -e .[dev]
     
-    - name: Quick lint check
+    - name: Run linter (Flake8)
       run: |
         flake8 src/ --count --select=E9,F63,F7,F82 --show-source --statistics
-      continue-on-error: true
-    
-    - name: Basic import test
-      env:
-        PYTHONUTF8: 1
-      run: |
-        python -c "import src.main; print('✅ Import successful')"
 
-  # =====================================================
-  # Build unique EXE
-  # =====================================================
-  build-exe:
-    name: Build Single EXE
-    runs-on: windows-latest
-    needs: test
-    if: always()
-    
-    steps:
-    - name: Checkout code
-      uses: actions/checkout@v4
-      with:
-        fetch-depth: 0
-    
-    - name: Set up Python
-      uses: actions/setup-python@v5
-      with:
-        python-version: ${{ env.PYTHON_VERSION }}
-        cache: 'pip'
-
-    - name: Get version
-      id: version
-      shell: bash
-      run: |
-        GIT_DESCRIBE=$(git describe --tags --always 2>/dev/null || echo "0.0.0-dev")
-        if [[ $GITHUB_REF == refs/tags/v* ]]; then
-            VERSION=${GITHUB_REF#refs/tags/v}
-        elif [[ "$GIT_DESCRIBE" == *"-"* && "$GIT_DESCRIBE" == *"g"* ]]; then
-            VERSION_NO_V=${GIT_DESCRIBE#v}
-            IFS='-' read -ra PARTS <<< "$VERSION_NO_V"
-            VERSION="${PARTS[0]}.post${PARTS[1]}+${PARTS[2]}"
-        else
-            HASH=${GIT_DESCRIBE}
-            VERSION="0.0.1.dev0+g${HASH}"
-        fi
-        echo "version=$VERSION" >> $GITHUB_OUTPUT
-        echo "📋 Version: $VERSION"
-
-    - name: Create version file
-      run: |
-        echo "__version__ = '${{ steps.version.outputs.version }}'" > src/__version__.py
-
-    - name: Install dependencies
-      run: |
-        python -m pip install --upgrade pip
-        pip install pyinstaller
-        pip install -e .
-
-    - name: Create PyInstaller spec file
-      run: |
-        echo "📝 Création du fichier spec PyInstaller..."
-        
-        $specContent = @'
-        # -*- mode: python ; coding: utf-8 -*-
-        
-        block_cipher = None
-        
-        a = Analysis(
-            ['src/main.py'],
-            pathex=[],
-            binaries=[],
-            datas=[
-                ('src\\\\assets', 'assets'),
-                ('README.md', '.'),
-            ],
-            hiddenimports=[
-                'tkinter', 'tkinter.ttk', 'tkinter.filedialog', 'tkinter.messagebox',
-                'tkinter.scrolledtext', 'PIL._tkinter_finder', 'fitz', 'reportlab',
-                'fontTools', 'pathlib', 'json', 'logging', 'threading', 'tempfile',
-                'shutil', 'datetime', 'dataclasses', 'enum', 'typing', 'regex', 'chardet',
-            ],
-            hookspath=[],
-            hooksconfig={},
-            runtime_hooks=[],
-            excludes=[
-                'matplotlib', 'numpy', 'scipy', 'pandas', 'jupyter', 'IPython', 'pytest',
-                'sphinx', 'setuptools', 'wheel', 'pip',
-            ],
-            win_no_prefer_redirects=False,
-            win_private_assemblies=False,
-            cipher=block_cipher,
-            noarchive=False,
-        )
-        
-        pyz = PYZ(a.pure, a.zipped_data, cipher=block_cipher)
-        
-        exe = EXE(
-            pyz, a.scripts, a.binaries, a.zipfiles, a.datas, [],
-            name='PDF-Layout-Translator',
-            debug=False,
-            bootloader_ignore_signals=False,
-            strip=False,
-            upx=True,
-            upx_exclude=[],
-            runtime_tmpdir=None,
-            console=False,
-            disable_windowed_traceback=False,
-            argv_emulation=False,
-            target_arch=None,
-            codesign_identity=None,
-            entitlements_file=None,
-        )
-        '@
-        
-        $specContent | Out-File -FilePath "single_exe.spec" -Encoding UTF8
-        Write-Host "✅ Fichier spec créé"
-    
     - name: Build single EXE with PyInstaller
       run: |
-        echo "🔨 Construction de l'exécutable unique..."
-        pyinstaller --clean single_exe.spec
-        if (Test-Path "dist\PDF-Layout-Translator.exe") {
-          Write-Host "✅ EXE créé avec succès !"
-          $file = Get-Item "dist\PDF-Layout-Translator.exe"
-          $sizeInMB = [math]::Round($file.Length / 1MB, 2)
-          Write-Host "📊 Taille: $sizeInMB MB"
+        echo "🔨 Building the executable..."
+        pyinstaller --noconfirm --onefile --windowed --name "${{ env.APP_NAME }}" src/main.py
+    
+    - name: Verify EXE creation
+      run: |
+        if (Test-Path "dist/${{ env.APP_NAME }}.exe") {
+          Write-Host "✅ EXE created successfully!"
         } else {
-          Write-Host "❌ Échec de la création de l'EXE"
-          Get-ChildItem dist\ -ErrorAction SilentlyContinue
+          Write-Host "❌ EXE creation failed."
           exit 1
         }
-    
-    - name: Test EXE launch
-      run: |
-        echo "🧪 Test de lancement..."
-        if (Test-Path "dist\PDF-Layout-Translator.exe") {
-          $file = Get-Item "dist\PDF-Layout-Translator.exe"
-          if ($file.Length -gt 10MB) {
-            Write-Host "✅ Taille EXE normale ($([math]::Round($file.Length / 1MB, 2)) MB)"
-          } else {
-            Write-Host "⚠️ EXE possiblement incomplet (taille: $([math]::Round($file.Length / 1MB, 2)) MB)"
-          }
-        }
-      continue-on-error: true
-    
-    - name: Rename with version
-      run: |
-        $oldName = "dist\PDF-Layout-Translator.exe"
-        $newName = "dist\PDF-Layout-Translator-${{ steps.version.outputs.version }}.exe"
-        if (Test-Path $oldName) {
-          Move-Item $oldName $newName
-          Write-Host "📝 Renommé en: PDF-Layout-Translator-${{ steps.version.outputs.version }}.exe"
-        }
-    
-    - name: Generate checksum
-      run: |
-        cd dist
-        $exeFile = Get-ChildItem "PDF-Layout-Translator-*.exe"
-        if ($exeFile) {
-          $hash = Get-FileHash $exeFile.Name -Algorithm SHA256
-          "$($hash.Hash.ToLower())  $($exeFile.Name)" | Out-File -FilePath "checksum.txt" -Encoding ASCII
-          Write-Host "🔐 Checksum généré:"
-          Get-Content "checksum.txt"
-        }
-    
-    - name: Upload EXE artifact
-      uses: actions/upload-artifact@v4
-      with:
-        name: pdf-layout-translator-exe
-        path: |
-          dist/PDF-Layout-Translator-*.exe
-          dist/checksum.txt
-        retention-days: 30
-    
-    outputs:
-      version: ${{ steps.version.outputs.version }}
 
-  # =====================================================
-  # Release (si tag ou manuel)
-  # =====================================================
-  create-release:
-    name: Create Release
-    runs-on: windows-latest
-    needs: [build-exe]
-    if: startsWith(github.ref, 'refs/tags/') || github.event.inputs.create_release == 'true'
-    
-    steps:
-    - name: Checkout code
-      uses: actions/checkout@v4
-    
-    - name: Download EXE
-      uses: actions/download-artifact@v4
-      with:
-        name: pdf-layout-translator-exe
-        path: release-assets/
-    
-    - name: Generate release notes
-      run: |
-        $version = "${{ needs.build-exe.outputs.version }}"
-        
-        $releaseNotes = @'
-        # 🚀 PDF Layout Translator v{0}
-        
-        ## 📱 Application Windows - Un seul fichier EXE !
-        
-        **Nouveau :** Application complète dans un seul exécutable - aucune installation requise !
-        
-        ### 📦 Téléchargement
-        - **PDF-Layout-Translator-{0}.exe** (~ 50-80 MB)
-          - ✅ **Prêt à l'emploi** - Double-cliquez et c'est parti !
-          - ✅ **Portable** - Fonctionne depuis n'importe où (clé USB, dossier, etc.)
-          - ✅ **Aucune installation** - Pas d'admin requis
-          - ✅ **Auto-contenu** - Toutes les dépendances incluses
-        
-        ### 🚀 Utilisation ultra-simple
-        1. **Téléchargez** le fichier .exe
-        2. **Double-cliquez** dessus
-        3. **C'est tout !** L'application se lance directement
-        
-        ### ✨ Fonctionnalités
-        - 🔍 **Analyse automatique** de la structure PDF
-        - 🌐 **Interface avec IA** (ChatGPT, Claude, Gemini...)
-        - 📐 **Préservation parfaite** de la mise en page
-        - 🔧 **Gestion intelligente** des polices
-        - 📤 **Export professionnel** du PDF traduit
-        - 👀 **Prévisualisation** avec comparaison avant/après
-        
-        ### 🔒 Sécurité
-        - **Checksum SHA256** : Vérifiez l'intégrité avec `checksum.txt`
-        - **Code source ouvert** : Consultable sur GitHub
-        - **Pas de télémétrie** : Vos données restent locales
-        
-        ### 💻 Prérequis
-        - **Windows 10/11** (64-bit)
-        - **4 GB RAM** minimum
-        - **200 MB espace libre** pour les fichiers temporaires
-        
-        ### 🆘 Support
-        - 🐛 **Bugs** : [GitHub Issues](https://github.com/loreal/pdf-layout-translator/issues)
-        - 📚 **Documentation** : [README](https://github.com/loreal/pdf-layout-translator)
-        - 💬 **Questions** : [Discussions GitHub](https://github.com/loreal/pdf-layout-translator/discussions)
-        
-        ### 🔄 Mise à jour
-        Simplement télécharger la nouvelle version et remplacer l'ancien fichier !
-        
-        ---
-        💡 **Conseil** : Ajoutez l'EXE à vos favoris Windows pour un accès rapide !
-        '@ -f $version
-        
-        $releaseNotes | Out-File -FilePath "RELEASE_NOTES.md" -Encoding UTF8
-        echo "notes_file=RELEASE_NOTES.md" >> $env:GITHUB_OUTPUT
-    
-    - name: Create GitHub Release
+    - name: Create Release (if tag)
+      if: startsWith(github.ref, 'refs/tags/')
       uses: softprops/action-gh-release@v2
       with:
-        tag_name: ${{ startsWith(github.ref, 'refs/tags/') && github.ref || format('v{0}', needs.build-exe.outputs.version) }}
-        name: "PDF Layout Translator v${{ needs.build-exe.outputs.version }}"
-        body_path: RELEASE_NOTES.md
-        files: |
-          release-assets/PDF-Layout-Translator-*.exe
-          release-assets/checksum.txt
-        draft: false
-        prerelease: ${{ contains(needs.build-exe.outputs.version, 'dev') }}
+        files: dist/${{ env.APP_NAME }}.exe
       env:
         GITHUB_TOKEN: ${{ secrets.GITHUB_TOKEN }}
-
-  # =====================================================
-  # Notification de succès
-  # =====================================================
-  notify-success:
-    name: Success Notification
-    runs-on: windows-latest
-    needs: [build-exe]
-    if: success()
-    
-    steps:
-    - name: Success message
-      run: |
-        Write-Host "🎉 Build réussi !"
-        Write-Host "📦 EXE disponible dans les artifacts"
-        Write-Host "⬇️  Téléchargez depuis la page Actions ou Releases"
-        Write-Host "🚀 Version: ${{ needs.build-exe.outputs.version }}"
