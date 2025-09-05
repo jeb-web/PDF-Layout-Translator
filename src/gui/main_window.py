@@ -76,7 +76,10 @@ class MainWindow:
         self._display_analysis_results(analysis_data)
         
         required_fonts = [font['name'] for font in analysis_data.get('fonts_used', [])]
-        
+    
+        # AJOUTER CETTE LIGNE
+        print(f"[DEBUG-GUI] Polices envoyées au FontManager pour vérification : {required_fonts}")
+            
         # --- CORRECTION : Supprimer le filtrage prématuré. On envoie la liste complète au FontManager. ---
         # L'ancienne ligne "fonts_to_check = ..." a été supprimée.
         font_report = self.font_manager.check_fonts_availability(required_fonts)
@@ -828,6 +831,7 @@ class MainWindow:
 
     def _preview_layout(self):
         messagebox.showinfo("Info", "Pas encore implémenté")
+
 
 
 
