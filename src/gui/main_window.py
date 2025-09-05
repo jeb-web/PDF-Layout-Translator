@@ -356,17 +356,32 @@ class MainWindow:
             finally:
                 self._set_processing(False)
         threading.Thread(target=thread_target, daemon=True).start()
-
+        
     def _prepare_render_version(self, pages: List[PageObject], translations: Dict[str, str]) -> List[PageObject]:
+        self.debug_logger.info("--- Préparation de la 'Version à Rendre' (v1.1 - Mode Bloc) ---")
         import copy
         render_pages = copy.deepcopy(pages)
+        
         for page in render_pages:
             for block in page.text_blocks:
-                for span in block.spans:
-                    translated_text = translations.get(span.id)
-                    if translated_text and translated_text.strip():
-                        span.text = translated_text
-        self.debug_logger.info("'Version à Rendre' créée : le texte de chaque segment est maintenant final.")
+                if not block.spans:
+                    continue
+
+                # On cherche la traduction pour l'ID du BLOC
+                translated_text = translations.get(block.id)
+                
+                if translated_text is not None: # La traduction peut être une chaîne vide, c'est valide
+                    self.debug_logger.info(f"  - Bloc {block.id}: Traduction trouvée.")
+                    # On met tout le texte traduit dans le PREMIER span du bloc.
+                    block.spans[0].text = translated_text
+                    # On supprime tous les autres spans, car ils sont maintenant redondants.
+                    block.spans = [block.spans[0]]
+                else:
+                    # Si aucune traduction n'est trouvée pour le bloc, on le vide pour éviter d'afficher l'ancien texte.
+                    self.debug_logger.warning(f"  - Bloc {block.id}: Aucune traduction trouvée. Le bloc sera vidé.")
+                    block.spans = []
+
+        self.debug_logger.info("'Version à Rendre' créée : le texte de chaque bloc est maintenant final et contient les sauts de ligne.")
         return render_pages
 
     def _export_pdf(self):
@@ -434,3 +449,4 @@ class ToolTip:
     def hide_tooltip(self, event):
         if self.tooltip_window: self.tooltip_window.destroy()
         self.tooltip_window = None
+
