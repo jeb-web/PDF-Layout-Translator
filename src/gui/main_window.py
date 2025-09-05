@@ -5,7 +5,7 @@ PDF Layout Translator - Fenêtre principale
 Interface graphique principale de l'application.
 
 Auteur: L'OréalGPT
-Version: 2.0.6 (Refonte du flux de données de mise en page)
+Version: 2.0.7 (Correction de la régression du FontDialog et des bugs de traduction)
 """
 
 import tkinter as tk
@@ -53,7 +53,7 @@ class MainWindow:
         self._initialize_managers()
         
     def _setup_window(self):
-        self.root.title("PDF Layout Translator v2.0.6")
+        self.root.title("PDF Layout Translator v2.0.7")
         self.root.geometry("1200x800")
         self.root.minsize(900, 700)
         style = ttk.Style()
@@ -254,10 +254,14 @@ class MainWindow:
         total_spans = sum(len(b.spans) for p in page_objects for b in p.text_blocks)
         summary = f"Analyse terminée.\n- Pages: {len(page_objects)}\n- Blocs de texte: {total_blocks}\n- Segments de style (spans): {total_spans}"
         self.analysis_text.config(state='normal'); self.analysis_text.delete('1.0', tk.END); self.analysis_text.insert('1.0', summary); self.analysis_text.config(state='disabled')
-        required_fonts = {span.font.name for page in page_objects for block in page_objects for span in block.spans}
+        
+        # CORRECTION DE LA RÉGRESSION: Boucle correcte pour extraire les polices
+        required_fonts = {span.font.name for page in page_objects for block in page.text_blocks for span in block.spans}
+        
         font_report = self.font_manager.check_fonts_availability(list(required_fonts))
         if not font_report['all_available']:
             FontDialog(self.root, self.font_manager, font_report).show()
+            
         self.continue_to_translation_button.config(state='normal')
         self.notebook.select(1)
 
@@ -363,9 +367,7 @@ class MainWindow:
                     translated_text = translations.get(span.id)
                     if translated_text and translated_text.strip():
                         span.text = translated_text
-                    else:
-                        span.text = span.text
-                    span.translated_text = ""
+                    # Si pas de traduction ou si elle est vide, on garde le texte original
         self.debug_logger.info("'Version à Rendre' créée : le texte de chaque segment est maintenant final.")
         return render_pages
 
