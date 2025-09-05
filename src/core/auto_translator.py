@@ -49,22 +49,42 @@ class AutoTranslator:
             if source is not None and source.text and source.text.strip():
                 source_text = source.text
                 self.debug_logger.info(f"  > Traitement {i+1}/{total_units} (ID: {unit.get('id')}): '{source_text[:70]}...'")
+                translated_text = "" # Initialisation
                 try:
+                    # Pause pour éviter le blocage de l'API
                     if i > 0 and i % 15 == 0:
                         self.debug_logger.info("    ... Pause de 0.5s pour éviter le blocage de l'API...")
                         sleep(0.5)
-                    translated_text = self.translator.translate(source_text, dest=target_lang).text
-                    if target is None: target = etree.SubElement(unit, "target")
-                    target.text = translated_text
-                    translated_count += 1
-                    self.debug_logger.info(f"    Succès -> '{translated_text[:70]}...'")
+                    
+                    # --- BLOC DE FIABILISATION ---
+                    translation_result = self.translator.translate(source_text, dest=target_lang)
+                    
+                    # Vérification cruciale : la bibliothèque peut renvoyer None
+                    if translation_result and translation_result.text:
+                        translated_text = translation_result.text
+                        translated_count += 1
+                        self.debug_logger.info(f"    Succès -> '{translated_text[:70]}...'")
+                    else:
+                        # Si la traduction échoue silencieusement, on conserve le texte source.
+                        self.logger.warning(f"Traduction vide retournée pour '{source_text[:30]}...'. Texte source conservé.")
+                        self.debug_logger.warning(f"    Échec ! Résultat de traduction vide. Conservation du texte source.")
+                        translated_text = source_text
+                        failed_count += 1
+                    # --- FIN DU BLOC ---
+
                 except Exception as e:
                     self.logger.warning(f"Échec traduction pour '{source_text[:30]}...': {e}. Texte source conservé.")
                     self.debug_logger.warning(f"    Échec ! Erreur: {e}. Conservation du texte source.")
+                    translated_text = source_text # Assurer que la variable a toujours une valeur
                     failed_count += 1
-                    if target is None: target = etree.SubElement(unit, "target")
-                    target.text = source_text
+                
+                # S'assurer que la cible existe avant d'écrire
+                if target is None:
+                    target = etree.SubElement(unit, "target")
+                target.text = translated_text
+
             elif target is None:
+                # Créer une balise target vide si elle n'existe pas, même pour une source vide
                 etree.SubElement(unit, "target")
 
         self.debug_logger.info("--- Fin de la Traduction Automatique ---")
