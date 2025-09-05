@@ -113,16 +113,14 @@ class PDFReconstructor:
         align = self._get_text_alignment(element_layout)
         original_font_name = element_layout.get('original_font_name', 'Arial')
         
-        # AJOUTER CES 3 LIGNES
+        # --- AJOUT POUR DEBUG ---
         print(f"--- [DEBUG-RECONSTRUCTOR] ---")
         print(f"[DEBUG-RECONSTRUCTOR] Tentative de remplacement pour la police : '{original_font_name}'")
         font_path = self.font_manager.get_replacement_font_path(original_font_name)
         print(f"[DEBUG-RECONSTRUCTOR] Résultat de FontManager.get_replacement_font_path : {font_path}")
-
+        # --- FIN AJOUT DEBUG ---
         
         # --- MODIFICATION MAJEURE : Le reconstructeur obéit au FontManager ---
-        font_path = self.font_manager.get_replacement_font_path(original_font_name)
-        
         if font_path and font_path.exists():
             page.insert_textbox(rect, text_to_render, 
                                      fontsize=font_size, 
@@ -141,4 +139,3 @@ class PDFReconstructor:
         if content_type in ['title', 'subtitle', 'header', 'footer']:
             return fitz.TEXT_ALIGN_CENTER
         return fitz.TEXT_ALIGN_LEFT
-
