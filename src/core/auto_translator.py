@@ -5,7 +5,7 @@ PDF Layout Translator - Module de Traduction Automatique
 Utilise des services externes pour traduire le contenu d'un fichier XLIFF.
 
 Auteur: L'OréalGPT
-Version: 2.0.3 (Correction du parsing XLIFF et ajout de logs)
+Version: 2.0.7 (Correction du parsing XLIFF)
 """
 
 import logging
@@ -23,7 +23,7 @@ class AutoTranslator:
     
     def __init__(self):
         self.logger = logging.getLogger(__name__)
-        self.debug_logger = logging.getLogger('debug_trace') # Logger pour les détails
+        self.debug_logger = logging.getLogger('debug_trace')
         if GOOGLETRANS_AVAILABLE:
             self.translator = Translator()
         else:
@@ -47,7 +47,7 @@ class AutoTranslator:
         parser = etree.XMLParser(remove_blank_text=True)
         root = etree.fromstring(xliff_content.encode('utf-8'), parser)
         
-        # CORRECTION: Utiliser le namespace pour trouver les balises
+        # CORRECTION : Utiliser le namespace pour trouver les balises
         ns = {'xliff': 'urn:oasis:names:tc:xliff:document:1.2'}
         trans_units = root.xpath("//xliff:trans-unit", namespaces=ns)
         total_units = len(trans_units)
