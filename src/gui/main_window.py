@@ -5,7 +5,7 @@ PDF Layout Translator - Fenêtre principale
 Interface graphique principale de l'application.
 
 Auteur: L'OréalGPT
-Version: 2.0.4 (Correction du crash et intégration du debug amélioré)
+Version: 2.0.5 (Correction des imports de typing)
 """
 
 import tkinter as tk
@@ -13,6 +13,8 @@ from tkinter import ttk, filedialog, messagebox, scrolledtext
 import threading
 import logging
 from pathlib import Path
+# CORRECTION : Ajout de l'import manquant
+from typing import List
 import json
 import os
 from dataclasses import asdict
@@ -52,7 +54,7 @@ class MainWindow:
         self._initialize_managers()
         
     def _setup_window(self):
-        self.root.title("PDF Layout Translator v2.0.4")
+        self.root.title("PDF Layout Translator v2.0.5")
         self.root.geometry("1200x800")
         self.root.minsize(900, 700)
         style = ttk.Style()
@@ -69,7 +71,6 @@ class MainWindow:
             self.translation_parser = TranslationParser()
             self.auto_translator = AutoTranslator()
             self.layout_processor = LayoutProcessor(self.font_manager)
-            # CORRECTION CRASH: Passer le font_manager au reconstructeur
             self.pdf_reconstructor = PDFReconstructor(self.font_manager)
             self.logger.info("Gestionnaires initialisés avec succès")
         except Exception as e:
@@ -238,13 +239,9 @@ class MainWindow:
                 pdf_path = Path(session_info.original_pdf_path)
                 page_objects = self.pdf_analyzer.analyze_pdf(pdf_path)
                 session_dir = self.session_manager.get_session_directory(self.current_session_id)
-                
-                # DEBUG: Sauvegarde du DOM
                 dom_path = session_dir / "1_dom_analysis.json"
-                with open(dom_path, "w", encoding="utf-8") as f:
-                    json.dump([asdict(p) for p in page_objects], f, indent=2)
+                with open(dom_path, "w", encoding="utf-8") as f: json.dump([asdict(p) for p in page_objects], f, indent=2)
                 self.debug_logger.info(f"Fichier de débogage '1_dom_analysis.json' sauvegardé.")
-
                 self.root.after(0, self._post_analysis_step, page_objects)
             except Exception as e:
                 self.logger.error(f"Erreur d'analyse: {e}", exc_info=True)
@@ -267,7 +264,6 @@ class MainWindow:
 
     def _generate_translation_export(self):
         def thread_target():
-            # ... (logique inchangée, mais le bouton est maintenant pour l'usage manuel)
             self._set_processing(True, "Génération du fichier XLIFF...")
             try:
                 page_objects = self._load_dom_from_file(self.current_session_id, "1_dom_analysis.json")
@@ -290,23 +286,16 @@ class MainWindow:
         def thread_target():
             self._set_processing(True, "Lancement de la traduction automatique...")
             try:
-                # Étape 1: Générer le XLIFF en mémoire
                 self.debug_logger.info("Auto-Traduction: Étape 1/3 - Génération du XLIFF en mémoire...")
                 page_objects = self._load_dom_from_file(self.current_session_id, "1_dom_analysis.json")
                 xliff_content = self.text_extractor.create_xliff(page_objects, self.source_lang_var.get(), self.target_lang_var.get())
-                
                 session_dir = self.session_manager.get_session_directory(self.current_session_id)
                 with open(session_dir / "2_xliff_to_translate.xliff", "w", encoding="utf-8") as f: f.write(xliff_content)
                 self.debug_logger.info("Fichier de débogage '2_xliff_to_translate.xliff' sauvegardé.")
-
-                # Étape 2: Envoyer le contenu à la traduction
                 self.debug_logger.info("Auto-Traduction: Étape 2/3 - Envoi au service de traduction...")
                 translated_xliff = self.auto_translator.translate_xliff_content(xliff_content, self.target_lang_var.get())
-                
                 with open(session_dir / "3_xliff_translated.xliff", "w", encoding="utf-8") as f: f.write(translated_xliff)
                 self.debug_logger.info("Fichier de débogage '3_xliff_translated.xliff' sauvegardé.")
-
-                # Étape 3: Mettre à jour l'interface avec le résultat
                 self.debug_logger.info("Auto-Traduction: Étape 3/3 - Affichage du résultat.")
                 self.root.after(0, lambda: self.translation_input.delete('1.0', tk.END))
                 self.root.after(0, lambda: self.translation_input.insert('1.0', translated_xliff))
@@ -327,10 +316,8 @@ class MainWindow:
             try:
                 translations = self.translation_parser.parse_xliff(xliff_content)
                 session_dir = self.session_manager.get_session_directory(self.current_session_id)
-                
                 with open(session_dir / "4_parsed_translations.json", "w", encoding="utf-8") as f: json.dump(translations, f, indent=2)
                 self.debug_logger.info(f"Fichier de débogage '4_parsed_translations.json' sauvegardé avec {len(translations)} éléments.")
-
                 self.root.after(0, lambda: self.continue_to_layout_button.config(state='normal'))
                 self.root.after(0, lambda: messagebox.showinfo("Succès", f"{len(translations)} traductions importées avec succès."))
             except Exception as e:
@@ -349,10 +336,8 @@ class MainWindow:
                 with open(session_dir / "4_parsed_translations.json", "r", encoding="utf-8") as f:
                     translations = json.load(f)
                 final_pages = self.layout_processor.process_pages(page_objects, translations)
-                
                 with open(session_dir / "5_final_layout.json", "w", encoding="utf-8") as f: json.dump([asdict(p) for p in final_pages], f, indent=2)
                 self.debug_logger.info("Fichier de débogage '5_final_layout.json' sauvegardé.")
-
                 self.root.after(0, lambda: self.layout_results_text.config(state='normal'))
                 self.root.after(0, lambda: self.layout_results_text.insert('1.0', "Calcul du reflow terminé. Prêt pour l'export."))
                 self.root.after(0, lambda: self.layout_results_text.config(state='disabled'))
