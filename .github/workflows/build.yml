@@ -34,8 +34,16 @@ jobs:
     
     - name: Build single EXE with PyInstaller
       run: |
-        echo "🔨 Building the executable with all explicit hidden imports..."
-        pyinstaller --noconfirm --onefile --windowed --name "${{ env.APP_NAME }}" --hidden-import=reportlab --hidden-import=PIL --hidden-import=fitz --hidden-import=lxml --hidden-import=fontTools --hidden-import=googletrans src/main.py
+        echo "🔨 Building the executable with the correct source path..."
+        pyinstaller --noconfirm --onefile --windowed --name "${{ env.APP_NAME }}" `
+        --paths src `
+        --hidden-import=reportlab `
+        --hidden-import=PIL `
+        --hidden-import=fitz `
+        --hidden-import=lxml `
+        --hidden-import=fontTools `
+        --hidden-import=googletrans `
+        src/main.py
 
     - name: Verify EXE creation
       run: |
