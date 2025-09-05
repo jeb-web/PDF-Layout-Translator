@@ -5,7 +5,7 @@ PDF Layout Translator - Fenêtre principale
 Interface graphique principale de l'application.
 
 Auteur: L'OréalGPT
-Version: 2.0.5 (Correction des imports de typing)
+Version: 2.0.6 (Refonte du flux de données de mise en page)
 """
 
 import tkinter as tk
@@ -13,8 +13,7 @@ from tkinter import ttk, filedialog, messagebox, scrolledtext
 import threading
 import logging
 from pathlib import Path
-# CORRECTION : Ajout de l'import manquant
-from typing import List
+from typing import List, Dict
 import json
 import os
 from dataclasses import asdict
@@ -54,7 +53,7 @@ class MainWindow:
         self._initialize_managers()
         
     def _setup_window(self):
-        self.root.title("PDF Layout Translator v2.0.5")
+        self.root.title("PDF Layout Translator v2.0.6")
         self.root.geometry("1200x800")
         self.root.minsize(900, 700)
         style = ttk.Style()
@@ -331,14 +330,20 @@ class MainWindow:
         def thread_target():
             self._set_processing(True, "Calcul de la mise en page...")
             try:
-                page_objects = self._load_dom_from_file(self.current_session_id, "1_dom_analysis.json")
+                self.debug_logger.info("--- Début du Traitement de la Mise en Page ---")
                 session_dir = self.session_manager.get_session_directory(self.current_session_id)
+                self.debug_logger.info("Étape 1/3: Chargement des données (DOM original et traductions)...")
+                page_objects = self._load_dom_from_file(self.current_session_id, "1_dom_analysis.json")
                 with open(session_dir / "4_parsed_translations.json", "r", encoding="utf-8") as f:
                     translations = json.load(f)
-                final_pages = self.layout_processor.process_pages(page_objects, translations)
+                self.debug_logger.info("Étape 2/3: Préparation de la 'Version à Rendre'...")
+                render_version = self._prepare_render_version(page_objects, translations)
+                self.debug_logger.info("Étape 3/3: Lancement du calcul de reflow (LayoutProcessor)...")
+                final_pages = self.layout_processor.process_pages(render_version)
                 with open(session_dir / "5_final_layout.json", "w", encoding="utf-8") as f: json.dump([asdict(p) for p in final_pages], f, indent=2)
                 self.debug_logger.info("Fichier de débogage '5_final_layout.json' sauvegardé.")
                 self.root.after(0, lambda: self.layout_results_text.config(state='normal'))
+                self.root.after(0, lambda: self.layout_results_text.delete('1.0', tk.END))
                 self.root.after(0, lambda: self.layout_results_text.insert('1.0', "Calcul du reflow terminé. Prêt pour l'export."))
                 self.root.after(0, lambda: self.layout_results_text.config(state='disabled'))
                 self.root.after(0, lambda: self.continue_to_export_button.config(state='normal'))
@@ -348,6 +353,21 @@ class MainWindow:
             finally:
                 self._set_processing(False)
         threading.Thread(target=thread_target, daemon=True).start()
+
+    def _prepare_render_version(self, pages: List[PageObject], translations: Dict[str, str]) -> List[PageObject]:
+        import copy
+        render_pages = copy.deepcopy(pages)
+        for page in render_pages:
+            for block in page.text_blocks:
+                for span in block.spans:
+                    translated_text = translations.get(span.id)
+                    if translated_text and translated_text.strip():
+                        span.text = translated_text
+                    else:
+                        span.text = span.text
+                    span.translated_text = ""
+        self.debug_logger.info("'Version à Rendre' créée : le texte de chaque segment est maintenant final.")
+        return render_pages
 
     def _export_pdf(self):
         output_filename = self.output_filename_var.get().strip()
@@ -395,22 +415,18 @@ class MainWindow:
 
     def _open_output_folder(self):
         if hasattr(self, '_output_folder') and self._output_folder.exists(): os.startfile(self._output_folder)
-
+        
     def _load_recent_sessions(self): pass
     def _open_selected_session(self): messagebox.showinfo("Info", "La reprise de session sera implémentée dans une future version.")
 
 class ToolTip:
     def __init__(self, widget, text):
-        self.widget = widget
-        self.text = text
-        self.tooltip_window = None
-        widget.bind("<Enter>", self.show_tooltip)
-        widget.bind("<Leave>", self.hide_tooltip)
+        self.widget = widget; self.text = text; self.tooltip_window = None
+        widget.bind("<Enter>", self.show_tooltip); widget.bind("<Leave>", self.hide_tooltip)
     def show_tooltip(self, event):
         if self.tooltip_window or not self.text: return
         x, y, _, _ = self.widget.bbox("insert")
-        x += self.widget.winfo_rootx() + 25
-        y += self.widget.winfo_rooty() + 25
+        x += self.widget.winfo_rootx() + 25; y += self.widget.winfo_rooty() + 25
         self.tooltip_window = tw = tk.Toplevel(self.widget)
         tw.wm_overrideredirect(True); tw.wm_geometry(f"+{x}+{y}")
         label = tk.Label(tw, text=self.text, justify='left', background="#ffffe0", relief='solid', borderwidth=1, font=("tahoma", "8", "normal"))
