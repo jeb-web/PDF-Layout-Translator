@@ -5,7 +5,7 @@ PDF Layout Translator - Analyseur de PDF
 Analyse approfondie de la structure et du contenu des documents PDF
 
 Auteur: L'OréalGPT
-Version: 1.0.0
+Version: 1.0.1 (Correction de la normalisation des polices)
 """
 
 import logging
@@ -42,6 +42,11 @@ class PDFAnalyzer:
             r'^[\s]*[•·‣⁃]\s+', r'^[\s]*[\d]+[.)]\s+', r'^[\s]*[a-zA-Z][.)]\s+', r'^[\s]*[-*+]\s+']
         self.logger.info("PDFAnalyzer initialisé")
     
+    # NOUVEAU : Méthode centralisée pour nettoyer les noms de police
+    def _normalize_font_name(self, font_name: str) -> str:
+        """Supprime le préfixe de sous-ensemble 'ABCDEE+' d'un nom de police."""
+        return re.sub(r"^[A-Z]{6}\+", "", font_name)
+
     def analyze_pdf(self, pdf_path: Path) -> Dict[str, Any]:
         try:
             self.logger.info(f"Début de l'analyse de {pdf_path}")
@@ -142,14 +147,12 @@ class PDFAnalyzer:
         }
 
     def _extract_font_info(self, span: Dict[str, Any]) -> FontInfo:
-        debug_logger = logging.getLogger('debug_trace')
         flags = span.get("flags", 0)
+        # CORRECTION : Normaliser le nom de la police ici
+        original_name = span.get("font", "Unknown")
+        normalized_name = self._normalize_font_name(original_name)
         
-        # LOG POUR DEBUG
-        font_name = span.get("font", "Unknown")
-        debug_logger.info(f"[DEBUG-ANALYZER-ELEMENT] Police extraite pour un élément de texte : '{font_name}'")
-        
-        return FontInfo(name=font_name, size=span.get("size", 12.0), flags=flags,
+        return FontInfo(name=normalized_name, size=span.get("size", 12.0), flags=flags,
             is_bold=bool(flags & 2**4), is_italic=bool(flags & 2**1), is_mono=bool(flags & 2**0),
             encoding=span.get("encoding", "utf-8"))
 
@@ -170,20 +173,14 @@ class PDFAnalyzer:
         return { i+1: {'dimensions': {'width': p.rect.width, 'height': p.rect.height}} for i, p in enumerate(self.doc) }
     
     def _analyze_fonts(self) -> List[Dict[str, Any]]:
-        debug_logger = logging.getLogger('debug_trace')
         fonts = {}
-        
-        # LOG POUR DEBUG
-        all_font_names = []
         for page in self.doc:
             for f in page.get_fonts():
-                name = f[3]
-                all_font_names.append(name) # Collecter tous les noms, même les doublons
-                if name not in fonts: fonts[name] = 0
-                fonts[name] += 1
-        
-        debug_logger.info(f"[DEBUG-ANALYZER-LIST] Polices détectées pour la liste globale (brut) : {all_font_names}")
-        
+                # CORRECTION : Normaliser le nom de la police ici aussi
+                original_name = f[3]
+                normalized_name = self._normalize_font_name(original_name)
+                if normalized_name not in fonts: fonts[normalized_name] = 0
+                fonts[normalized_name] += 1
         return [{'name': name, 'page_count': count} for name, count in fonts.items()]
     
     def _calculate_statistics(self, analysis_result: Dict[str, Any]) -> Dict[str, Any]:
