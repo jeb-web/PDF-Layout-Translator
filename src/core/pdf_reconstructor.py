@@ -3,13 +3,9 @@
 """
 PDF Layout Translator - Moteur de Rendu PDF
 Dessine le DOM finalisé dans un nouveau fichier PDF.
-
-Auteur: L'OréalGPT
-Version: 2.0.5 (Correction des imports de typing)
 """
 import logging
 from pathlib import Path
-# CORRECTION : Ajout de l'import manquant
 from typing import List, Tuple
 import fitz
 from core.data_model import PageObject
@@ -39,28 +35,35 @@ class PDFReconstructor:
         for page_data in pages:
             self.debug_logger.info(f"Rendu de la page {page_data.page_number}...")
             page = doc.new_page(width=page_data.dimensions[0], height=page_data.dimensions[1])
+            
             for block in page_data.text_blocks:
-                if not block.final_bbox:
-                    self.debug_logger.warning(f"  - Bloc {block.id} ignoré : pas de boîte de délimitation finale calculée.")
+                if not block.final_bbox: 
+                    self.debug_logger.warning(f"  - Bloc {block.id} ignoré : pas de Bbox finale.")
                     continue
-                full_text = "".join([s.translated_text if s.translated_text is not None else s.text for s in block.spans])
-                self.debug_logger.info(f"  -> Rendu du bloc {block.id} avec le texte : '{full_text[:70]}...'")
+
+                full_text = "".join([s.text for s in block.spans])
+                self.debug_logger.info(f"  -> Rendu du bloc {block.id} avec texte: '{full_text[:70]}...'")
+                
                 if block.spans:
                     main_span = block.spans[0]
                     font_path = self.font_manager.get_replacement_font_path(main_span.font.name)
                     color_rgb = self._hex_to_rgb(main_span.font.color)
+
                     if font_path and font_path.exists():
                         font_internal_name = f"F-{font_path.stem.replace(' ', '')}"
                         try:
-                            page.insert_textbox(block.final_bbox, full_text, fontsize=main_span.font.size, fontname=font_internal_name, fontfile=str(font_path), color=color_rgb)
-                            self.debug_logger.info(f"     Bloc inséré avec la police '{font_path.name}' et la couleur {color_rgb}.")
+                            page.insert_textbox(block.final_bbox, full_text, fontsize=main_span.font.size,
+                                                fontname=font_internal_name, fontfile=str(font_path), color=color_rgb)
+                            self.debug_logger.info(f"     Bloc inséré avec police '{font_path.name}' et couleur {color_rgb}.")
                         except Exception as e:
-                             self.logger.error(f"Erreur d'insertion de texte pour bloc {block.id}: {e}")
-                             self.debug_logger.error(f"     ERREUR d'insertion de texte pour bloc {block.id}: {e}")
+                             self.logger.error(f"Erreur d'insertion texte bloc {block.id}: {e}")
+                             self.debug_logger.error(f"     ERREUR d'insertion texte bloc {block.id}: {e}")
                     else:
-                        self.logger.warning(f"Police de remplacement non trouvée pour '{main_span.font.name}', utilisation de Helvetica.")
-                        self.debug_logger.warning(f"     Police de remplacement non trouvée pour '{main_span.font.name}', utilisation de Helvetica.")
-                        page.insert_textbox(block.final_bbox, full_text, fontsize=main_span.font.size, fontname="helv", color=color_rgb)
+                        self.logger.warning(f"Police de remplacement non trouvée pour '{main_span.font.name}', utilisant Helvetica.")
+                        self.debug_logger.warning(f"     Police de remplacement non trouvée pour '{main_span.font.name}', utilisant Helvetica.")
+                        page.insert_textbox(block.final_bbox, full_text, fontsize=main_span.font.size,
+                                            fontname="helv", color=color_rgb)
+        
         doc.save(output_path, garbage=4, deflate=True)
         doc.close()
-        self.debug_logger.info(f"--- Rendu PDF Terminé. Fichier sauvegardé sous {output_path} ---")
+        self.debug_logger.info(f"--- Rendu PDF Terminé. Fichier sauvegardé: {output_path} ---")
