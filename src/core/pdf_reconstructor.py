@@ -2,7 +2,7 @@
 # -*- coding: utf-8 -*-
 """
 PDF Layout Translator - Moteur de Rendu PDF
-*** VERSION FINALE - Rendu Multi-Style Fiable ***
+*** VERSION FINALE - Rendu Multi-Style Fiable (CORRIGÉ) ***
 """
 import logging
 from pathlib import Path
@@ -30,9 +30,12 @@ class PDFReconstructor:
             return (0, 0, 0)
             
     def render_pages(self, pages: List[PageObject], output_path: Path):
-        self.debug_logger.info("--- Début du Rendu PDF (Mode Multi-Style) ---")
+        self.debug_logger.info("--- Début du Rendu PDF (Mode Multi-Style Corrigé) ---")
         doc = fitz.open()
         
+        # Cache pour les objets Font pour ne pas les recréer en boucle
+        font_cache = {}
+
         for page_data in pages:
             page = doc.new_page(width=page_data.dimensions[0], height=page_data.dimensions[1])
             
@@ -41,7 +44,6 @@ class PDFReconstructor:
                     continue
                 
                 tw = fitz.TextWriter(page.rect)
-                
                 block_bbox = fitz.Rect(block.final_bbox)
                 
                 if not block.spans: continue
@@ -57,8 +59,11 @@ class PDFReconstructor:
                         self.logger.warning(f"Police non trouvée pour '{span.font.name}', rendu ignoré.")
                         continue
                     
-                    font_buffer = font_path.read_bytes()
-                    font = fitz.Font(fontbuffer=font_buffer)
+                    # Utiliser le cache pour les polices
+                    if str(font_path) not in font_cache:
+                        font_buffer = font_path.read_bytes()
+                        font_cache[str(font_path)] = fitz.Font(fontbuffer=font_buffer)
+                    font = font_cache[str(font_path)]
                         
                     words = span.text.strip().split(' ')
                     for i, word in enumerate(words):
@@ -74,23 +79,27 @@ class PDFReconstructor:
                         if span.font.size > max_font_size_in_line:
                             max_font_size_in_line = span.font.size
 
-                        if current_pos.y > block_bbox.y1:
+                        if current_pos.y > block_bbox.y1 + max_font_size_in_line: # Tolérance
                             self.debug_logger.warning(f"Bloc {block.id}: Dépassement de hauteur.")
                             break
 
+                        # --- CORRECTION DE L'ERREUR 'color' ---
+                        # La couleur est un attribut du TextWriter, pas de la méthode append.
+                        # On doit le définir avant d'ajouter le texte.
+                        tw.fill(color=self._hex_to_rgb(span.font.color))
                         tw.append(
                             current_pos,
                             word_to_draw,
                             font=font,
-                            fontsize=span.font.size,
-                            color=self._hex_to_rgb(span.font.color)
+                            fontsize=span.font.size
                         )
+                        # --- FIN DE LA CORRECTION ---
                         current_pos.x += word_width
                     
-                    if current_pos.y > block_bbox.y1: break
+                    if current_pos.y > block_bbox.y1 + max_font_size_in_line: break
                 
                 tw.write_text(page, rect=block_bbox)
 
         doc.save(output_path, garbage=4, deflate=True)
         doc.close()
-        self.debug_logger.info(f"--- Rendu PDF (Mode Multi-Style) Terminé. ---")
+        self.debug_logger.info(f"--- Rendu PDF (Mode Multi-Style Corrigé) Terminé. ---")
