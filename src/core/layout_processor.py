@@ -31,7 +31,11 @@ class LayoutProcessor:
 
     def _get_text_width(self, text: str, font_name: str, font_size: float) -> float:
         font = self._get_font(font_name)
-        if not font: return len(text) * font_size * 0.6
+        # --- MODIFICATION POUR LA PREUVE ---
+        if not font:
+            self.debug_logger.warning(f"  [PREUVE] Échec de l'analyse de la police '{font_name}'. Utilisation du calcul de secours.")
+            return len(text) * font_size * 0.6
+        # --- FIN MODIFICATION ---
         cmap = font.getBestCmap()
         glyph_set = font.getGlyphSet()
         total_width = 0
