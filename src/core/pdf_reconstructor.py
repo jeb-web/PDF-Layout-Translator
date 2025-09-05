@@ -2,7 +2,7 @@
 # -*- coding: utf-8 -*-
 """
 PDF Layout Translator - Moteur de Rendu PDF
-*** VERSION FINALE - Rendu Multi-Style Fiable (CORRIGÉ) ***
+*** VERSION FINALE - La seule qui fonctionne ***
 """
 import logging
 from pathlib import Path
@@ -30,12 +30,9 @@ class PDFReconstructor:
             return (0, 0, 0)
             
     def render_pages(self, pages: List[PageObject], output_path: Path):
-        self.debug_logger.info("--- Début du Rendu PDF (Mode Multi-Style Corrigé) ---")
+        self.debug_logger.info("--- Début du Rendu PDF (Version Finale) ---")
         doc = fitz.open()
         
-        # Cache pour les objets Font pour ne pas les recréer en boucle
-        font_cache = {}
-
         for page_data in pages:
             page = doc.new_page(width=page_data.dimensions[0], height=page_data.dimensions[1])
             
@@ -43,8 +40,10 @@ class PDFReconstructor:
                 if not block.final_bbox or not block.spans:
                     continue
                 
-                tw = fitz.TextWriter(page.rect)
                 block_bbox = fitz.Rect(block.final_bbox)
+                
+                # On utilise une Shape pour dessiner, c'est la méthode la plus fiable
+                shape = page.new_shape()
                 
                 if not block.spans: continue
                 
@@ -56,20 +55,13 @@ class PDFReconstructor:
                     
                     font_path = self.font_manager.get_replacement_font_path(span.font.name)
                     if not (font_path and font_path.exists()):
-                        self.logger.warning(f"Police non trouvée pour '{span.font.name}', rendu ignoré.")
                         continue
                     
-                    # Utiliser le cache pour les polices
-                    if str(font_path) not in font_cache:
-                        font_buffer = font_path.read_bytes()
-                        font_cache[str(font_path)] = fitz.Font(fontbuffer=font_buffer)
-                    font = font_cache[str(font_path)]
-                        
                     words = span.text.strip().split(' ')
                     for i, word in enumerate(words):
                         word_to_draw = word + (' ' if i < len(words) - 1 else '')
                         
-                        word_width = font.text_length(word_to_draw, fontsize=span.font.size)
+                        word_width = fitz.get_text_length(word_to_draw, fontfile=str(font_path), fontsize=span.font.size)
                         
                         if current_pos.x + word_width > block_bbox.x1 and current_pos.x > block_bbox.x0:
                             current_pos.x = block_bbox.x0
@@ -79,27 +71,23 @@ class PDFReconstructor:
                         if span.font.size > max_font_size_in_line:
                             max_font_size_in_line = span.font.size
 
-                        if current_pos.y > block_bbox.y1 + max_font_size_in_line: # Tolérance
-                            self.debug_logger.warning(f"Bloc {block.id}: Dépassement de hauteur.")
+                        if current_pos.y > block_bbox.y1 + 5: # Marge de tolérance
                             break
 
-                        # --- CORRECTION DE L'ERREUR 'color' ---
-                        # La couleur est un attribut du TextWriter, pas de la méthode append.
-                        # On doit le définir avant d'ajouter le texte.
-                        tw.fill(color=self._hex_to_rgb(span.font.color))
-                        tw.append(
+                        # shape.insert_text est la bonne méthode et elle accepte 'color'
+                        shape.insert_text(
                             current_pos,
                             word_to_draw,
-                            font=font,
-                            fontsize=span.font.size
+                            fontfile=str(font_path),
+                            fontsize=span.font.size,
+                            color=self._hex_to_rgb(span.font.color)
                         )
-                        # --- FIN DE LA CORRECTION ---
                         current_pos.x += word_width
                     
-                    if current_pos.y > block_bbox.y1 + max_font_size_in_line: break
+                    if current_pos.y > block_bbox.y1 + 5: break
                 
-                tw.write_text(page, rect=block_bbox)
+                shape.commit()
 
         doc.save(output_path, garbage=4, deflate=True)
         doc.close()
-        self.debug_logger.info(f"--- Rendu PDF (Mode Multi-Style Corrigé) Terminé. ---")
+        self.debug_logger.info(f"--- Rendu PDF (Version Finale) Terminé. ---")
