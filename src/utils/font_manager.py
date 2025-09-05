@@ -2,7 +2,7 @@
 # -*- coding: utf-8 -*-
 """
 PDF Layout Translator - Gestionnaire de polices
-*** VERSION CORRIGÉE - Logique de mapping simple et robuste ***
+*** VERSION FINALE - Logique simple et directe ***
 """
 import os
 import logging
@@ -22,7 +22,7 @@ class FontManager:
         self.font_mappings_file = self.app_data_dir / "config" / "font_mappings.json"
         
         self.system_fonts: Dict[str, Path] = {}
-        self.font_mappings: Dict[str, str] = {} # Dictionnaire simple: original -> remplacement
+        self.font_mappings: Dict[str, str] = {}
         
         self._scan_system_fonts()
         self._load_font_mappings()
@@ -57,8 +57,7 @@ class FontManager:
     def _get_system_font_directories(self) -> List[Path]:
         dirs = []
         if platform.system() == 'Windows':
-            dirs.extend([Path(os.environ.get('WINDIR', 'C:\\Windows')) / 'Fonts', 
-                         Path.home() / 'AppData' / 'Local' / 'Microsoft' / 'Windows' / 'Fonts'])
+            dirs.extend([Path(os.environ.get('WINDIR', 'C:\\Windows')) / 'Fonts', Path.home() / 'AppData' / 'Local' / 'Microsoft' / 'Windows' / 'Fonts'])
         elif platform.system() == 'darwin':
             dirs.extend([Path('/System/Library/Fonts'), Path('/Library/Fonts'), Path.home() / 'Library' / 'Fonts'])
         else:
@@ -74,8 +73,7 @@ class FontManager:
                     self._add_font_from_metadata(font, font_path)
             else:
                 self._add_font_from_metadata(font_collection, font_path)
-        except (TTLibError, Exception) as e:
-            self.logger.debug(f"Impossible de traiter le fichier de police {font_path}: {e}")
+        except (TTLibError, Exception): pass
 
     def _add_font_from_metadata(self, font: TTFont, font_path: Path):
         name_table = font.get('name')
@@ -90,14 +88,8 @@ class FontManager:
 
     def check_fonts_availability(self, required_fonts: List[str]) -> Dict[str, Any]:
         missing_fonts = {font for font in set(required_fonts) if font not in self.system_fonts}
-        suggestions = {font: self._suggest_alternatives(font) for font in missing_fonts}
+        suggestions = {font: [{'font_name': "Arial"}] for font in missing_fonts}
         return {'missing_fonts': sorted(list(missing_fonts)), 'suggestions': suggestions, 'all_available': not missing_fonts}
-
-    def _suggest_alternatives(self, missing_font: str) -> List[Dict[str, Any]]:
-        # La suggestion de base reste Arial si disponible
-        if "Arial" in self.system_fonts: return [{'font_name': "Arial"}]
-        available = self.get_all_available_fonts()
-        return [{'font_name': available[0] if available else "Helvetica"}]
         
     def create_font_mapping(self, original_font: str, replacement_font_name: str):
         self.font_mappings[original_font] = replacement_font_name
@@ -107,32 +99,36 @@ class FontManager:
         return self.font_mappings.get(original_font)
 
     def get_replacement_font_path(self, original_font_name: str) -> Optional[Path]:
-        # Logique de remplacement simple
-        replacement_name = self.get_font_mapping(original_font_name) or original_font_name
-        
-        if replacement_name in self.system_fonts:
-            return self.system_fonts[replacement_name]
+        # 1. Tenter le mapping utilisateur
+        mapped_name = self.font_mappings.get(original_font_name)
+        if mapped_name and mapped_name in self.system_fonts:
+            return self.system_fonts[mapped_name]
 
-        # Fallback
-        self.logger.warning(f"Police '{original_font_name}' (ou son remplacement '{replacement_name}') non trouvée. Utilisation d'Arial.")
+        # 2. Tenter le nom original
+        if original_font_name in self.system_fonts:
+            return self.system_fonts[original_font_name]
+
+        # 3. Fallback sur Arial
         if "Arial" in self.system_fonts:
-             return self.system_fonts["Arial"]
+            return self.system_fonts["Arial"]
         
+        # 4. Fallback ultime
         if self.system_fonts:
             return next(iter(self.system_fonts.values()))
-            
         return None
 
     def _load_font_mappings(self):
         if self.font_mappings_file.exists():
             try:
                 with open(self.font_mappings_file, 'r', encoding='utf-8') as f:
-                    self.font_mappings = json.load(f)
-            except Exception as e: self.logger.warning(f"Impossible de charger les mappings: {e}")
+                    data = json.load(f)
+                    if isinstance(data, dict):
+                        self.font_mappings = data
+                    else: # Gérer le cas où le fichier est corrompu avec une liste
+                        self.font_mappings = {}
+            except Exception: self.font_mappings = {}
 
     def _save_font_mappings(self):
         self.font_mappings_file.parent.mkdir(parents=True, exist_ok=True)
-        try:
-            with open(self.font_mappings_file, 'w', encoding='utf-8') as f:
-                json.dump(self.font_mappings, f, indent=2)
-        except Exception as e: self.logger.error(f"Impossible de sauvegarder les mappings: {e}")
+        with open(self.font_mappings_file, 'w', encoding='utf-8') as f:
+            json.dump(self.font_mappings, f, indent=2)
