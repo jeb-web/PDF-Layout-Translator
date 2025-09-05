@@ -30,7 +30,7 @@ class AutoTranslator:
         if not self.is_available():
             raise RuntimeError("La bibliothèque 'googletrans' n'est pas installée.")
 
-        self.debug_logger.info("--- Début de la Traduction Automatique (Mode Stable) ---")
+        self.debug_logger.info("--- Début de la Traduction Automatique (Mode Fiable) ---")
         
         parser = etree.XMLParser(remove_blank_text=True)
         root = etree.fromstring(xliff_content.encode('utf-8'), parser)
@@ -54,7 +54,6 @@ class AutoTranslator:
                     
                     translation_result = self.translator.translate(source_text, dest=target_lang)
                     
-                    # BLINDAGE ESSENTIEL : On vérifie que la traduction n'est pas None
                     if translation_result and translation_result.text:
                         translated_text = translation_result.text
                         translated_count += 1
@@ -67,3 +66,24 @@ class AutoTranslator:
                     self.debug_logger.warning(f"  -> Échec de traduction pour '{source_text[:30]}...': {e}. Texte source conservé.")
                     translated_text = source_text
                     failed_count += 1
+                
+                if target is None:
+                    target = etree.SubElement(unit, "target")
+                target.text = translated_text
+            elif target is None:
+                etree.SubElement(unit, "target")
+
+        self.debug_logger.info(f"--- Fin de la boucle de Traduction: {translated_count} succès, {failed_count} échecs. ---")
+        
+        # --- BLINDAGE FINAL ---
+        # Cette fonction NE DOIT JAMAIS retourner None.
+        try:
+            # On tente de convertir l'arbre XML modifié en chaîne de caractères.
+            final_xliff = etree.tostring(root, pretty_print=True, encoding='utf-8', xml_declaration=True).decode('utf-8')
+            self.debug_logger.info("  -> Conversion finale du XLIFF en chaîne de caractères réussie.")
+            return final_xliff
+        except Exception as e:
+            # En cas d'échec critique, on retourne un XLIFF vide mais valide pour ne JAMAIS retourner None.
+            self.logger.error(f"Erreur critique lors de la finalisation du XLIFF traduit: {e}")
+            self.debug_logger.error(f"  -> ERREUR CRITIQUE lors de la conversion finale du XLIFF. Retour d'un XLIFF vide.", exc_info=True)
+            return '<?xml version="1.0" encoding="UTF-8"?><xliff version="1.
