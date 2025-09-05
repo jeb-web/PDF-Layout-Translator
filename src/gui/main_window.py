@@ -5,7 +5,7 @@ PDF Layout Translator - Fenêtre principale
 Interface graphique principale de l'application.
 
 Auteur: L'OréalGPT
-Version: 2.0.3 (Refonte de la logique de traduction automatique)
+Version: 2.0.4 (Correction du crash et intégration du debug amélioré)
 """
 
 import tkinter as tk
@@ -13,14 +13,11 @@ from tkinter import ttk, filedialog, messagebox, scrolledtext
 import threading
 import logging
 from pathlib import Path
-from typing import Dict, Any, Optional, List
-from datetime import datetime
 import json
 import os
 from dataclasses import asdict
 
-# Imports de la nouvelle architecture
-from core.session_manager import SessionManager, SessionStatus
+from core.session_manager import SessionManager
 from core.pdf_analyzer import PDFAnalyzer
 from core.text_extractor import TextExtractor
 from core.translation_parser import TranslationParser
@@ -32,33 +29,30 @@ from core.data_model import PageObject, TextBlock, TextSpan, FontInfo
 from gui.font_dialog import FontDialog
 
 class MainWindow:
-    # ... (le __init__ et les autres fonctions de setup restent les mêmes) ...
     def __init__(self, root: tk.Tk, config_manager):
         self.root = root
         self.config_manager = config_manager
         self.logger = logging.getLogger(__name__)
+        self.debug_logger = logging.getLogger('debug_trace')
         
-        self.session_manager: Optional[SessionManager] = None
-        self.font_manager: Optional[FontManager] = None
-        self.pdf_analyzer: Optional[PDFAnalyzer] = None
-        self.text_extractor: Optional[TextExtractor] = None
-        self.translation_parser: Optional[TranslationParser] = None
-        self.auto_translator: Optional[AutoTranslator] = None
-        self.layout_processor: Optional[LayoutProcessor] = None
-        self.pdf_reconstructor: Optional[PDFReconstructor] = None
+        self.session_manager = None
+        self.font_manager = None
+        self.pdf_analyzer = None
+        self.text_extractor = None
+        self.translation_parser = None
+        self.auto_translator = None
+        self.layout_processor = None
+        self.pdf_reconstructor = None
         
-        self.current_session_id: Optional[str] = None
+        self.current_session_id = None
         self.processing = False
         
         self._setup_window()
         self._create_widgets()
         self._initialize_managers()
-        self._load_recent_sessions()
         
-        self.logger.info("Interface principale v2 initialisée")
-    
     def _setup_window(self):
-        self.root.title("PDF Layout Translator v2.0.0")
+        self.root.title("PDF Layout Translator v2.0.4")
         self.root.geometry("1200x800")
         self.root.minsize(900, 700)
         style = ttk.Style()
@@ -75,11 +69,12 @@ class MainWindow:
             self.translation_parser = TranslationParser()
             self.auto_translator = AutoTranslator()
             self.layout_processor = LayoutProcessor(self.font_manager)
+            # CORRECTION CRASH: Passer le font_manager au reconstructeur
             self.pdf_reconstructor = PDFReconstructor(self.font_manager)
-            self.logger.info("Gestionnaires de l'architecture v2 initialisés avec succès")
+            self.logger.info("Gestionnaires initialisés avec succès")
         except Exception as e:
-            self.logger.error(f"Erreur d'initialisation des managers: {e}", exc_info=True)
-            messagebox.showerror("Erreur Critique", f"Erreur lors de l'initialisation des managers: {e}")
+            self.logger.error(f"Erreur d'initialisation: {e}", exc_info=True)
+            messagebox.showerror("Erreur Critique", f"Erreur d'initialisation: {e}")
 
     def _create_widgets(self):
         main_frame = ttk.Frame(self.root)
@@ -123,12 +118,6 @@ class MainWindow:
         ttk.Combobox(lang_frame, textvariable=self.target_lang_var, values=["fr", "en", "es", "de", "it"], width=8).pack(side='left', padx=(10, 0))
         self.start_button = ttk.Button(new_project_frame, text="Démarrer l'analyse", command=self._start_new_project)
         self.start_button.pack(pady=(20, 0))
-        recent_frame = ttk.LabelFrame(self.home_frame, text="Sessions Récentes", padding=20)
-        recent_frame.pack(fill='both', expand=True, padx=20, pady=(0, 20))
-        self.sessions_tree = ttk.Treeview(recent_frame, columns=('date', 'status'), show='tree headings')
-        self.sessions_tree.heading('#0', text='Nom'); self.sessions_tree.heading('date', text='Date'); self.sessions_tree.heading('status', text='Statut')
-        self.sessions_tree.pack(fill='both', expand=True)
-        ttk.Button(recent_frame, text="Ouvrir", command=self._open_selected_session).pack(side='left', pady=(10,0))
 
     def _create_analysis_tab(self):
         self.analysis_frame = ttk.Frame(self.notebook)
@@ -154,7 +143,7 @@ class MainWindow:
         self.auto_translate_button = ttk.Button(actions_frame, text="Traduire Automatiquement (Google)", command=self._auto_translate)
         self.auto_translate_button.pack(side='left', padx=(0, 10))
         ttk.Button(actions_frame, text="Générer Fichier de Traduction (XLIFF)", command=self._generate_translation_export).pack(side='left')
-        self.open_export_folder_button = ttk.Button(actions_frame, text="Ouvrir le dossier", command=self._open_export_folder, state='disabled')
+        self.open_export_folder_button = ttk.Button(actions_frame, text="Ouvrir le dossier de session", command=self._open_session_folder, state='disabled')
         self.open_export_folder_button.pack(side='left', padx=(10, 0))
         if not GOOGLETRANS_AVAILABLE:
             self.auto_translate_button.config(state='disabled')
@@ -202,7 +191,7 @@ class MainWindow:
 
     def _create_menu(self):
         pass
-
+    
     def _browse_pdf_file(self):
         filename = filedialog.askopenfilename(title="Sélectionner un fichier PDF", filetypes=[("Fichiers PDF", "*.pdf")])
         if filename: self.file_path_var.set(filename)
@@ -216,12 +205,24 @@ class MainWindow:
             self.status_label.config(text="Prêt")
             self.processing_indicator.stop()
 
+    def _setup_debug_logger(self, session_id: str):
+        session_dir = self.session_manager.get_session_directory(session_id)
+        if session_dir:
+            handler = logging.FileHandler(session_dir / "debug_session_trace.log", mode='w', encoding='utf-8')
+            handler.setFormatter(logging.Formatter('%(asctime)s - %(message)s'))
+            if self.debug_logger.hasHandlers(): self.debug_logger.handlers.clear()
+            self.debug_logger.addHandler(handler)
+            self.debug_logger.setLevel(logging.INFO)
+            self.debug_logger.propagate = False
+            self.debug_logger.info(f"--- Début de la trace de débogage pour la session {session_id} ---")
+
     def _start_new_project(self):
         pdf_path = self.file_path_var.get()
         if not pdf_path: return messagebox.showwarning("Attention", "Veuillez sélectionner un fichier PDF.")
         try:
             session_id = self.session_manager.create_session(Path(pdf_path))
             self.current_session_id = session_id
+            self._setup_debug_logger(session_id)
             self.session_label.config(text=f"Session: {Path(pdf_path).name}")
             self.notebook.select(1)
             self._analyze_pdf()
@@ -237,8 +238,13 @@ class MainWindow:
                 pdf_path = Path(session_info.original_pdf_path)
                 page_objects = self.pdf_analyzer.analyze_pdf(pdf_path)
                 session_dir = self.session_manager.get_session_directory(self.current_session_id)
-                with open(session_dir / "dom_analysis.json", "w", encoding="utf-8") as f:
+                
+                # DEBUG: Sauvegarde du DOM
+                dom_path = session_dir / "1_dom_analysis.json"
+                with open(dom_path, "w", encoding="utf-8") as f:
                     json.dump([asdict(p) for p in page_objects], f, indent=2)
+                self.debug_logger.info(f"Fichier de débogage '1_dom_analysis.json' sauvegardé.")
+
                 self.root.after(0, self._post_analysis_step, page_objects)
             except Exception as e:
                 self.logger.error(f"Erreur d'analyse: {e}", exc_info=True)
@@ -252,7 +258,7 @@ class MainWindow:
         total_spans = sum(len(b.spans) for p in page_objects for b in p.text_blocks)
         summary = f"Analyse terminée.\n- Pages: {len(page_objects)}\n- Blocs de texte: {total_blocks}\n- Segments de style (spans): {total_spans}"
         self.analysis_text.config(state='normal'); self.analysis_text.delete('1.0', tk.END); self.analysis_text.insert('1.0', summary); self.analysis_text.config(state='disabled')
-        required_fonts = {span.font.name for page in page_objects for block in page.text_blocks for span in block.spans}
+        required_fonts = {span.font.name for page in page_objects for block in page_objects for span in block.spans}
         font_report = self.font_manager.check_fonts_availability(list(required_fonts))
         if not font_report['all_available']:
             FontDialog(self.root, self.font_manager, font_report).show()
@@ -261,49 +267,53 @@ class MainWindow:
 
     def _generate_translation_export(self):
         def thread_target():
+            # ... (logique inchangée, mais le bouton est maintenant pour l'usage manuel)
             self._set_processing(True, "Génération du fichier XLIFF...")
             try:
-                page_objects = self._load_dom_from_file(self.current_session_id, "dom_analysis.json")
+                page_objects = self._load_dom_from_file(self.current_session_id, "1_dom_analysis.json")
                 xliff_content = self.text_extractor.create_xliff(page_objects, self.source_lang_var.get(), self.target_lang_var.get())
                 session_dir = self.session_manager.get_session_directory(self.current_session_id)
-                export_dir = session_dir / "export"
-                export_dir.mkdir(exist_ok=True)
-                xliff_path = export_dir / "translation.xliff"
-                with open(xliff_path, "w", encoding="utf-8") as f:
-                    f.write(xliff_content)
-                self._export_folder = export_dir
+                xliff_path = session_dir / "2_xliff_to_translate.xliff"
+                with open(xliff_path, "w", encoding="utf-8") as f: f.write(xliff_content)
+                self.debug_logger.info(f"Fichier de débogage '2_xliff_to_translate.xliff' sauvegardé.")
                 self.root.after(0, lambda: self.open_export_folder_button.config(state='normal'))
-                self.root.after(0, lambda: messagebox.showinfo("Succès", f"Fichier 'translation.xliff' créé dans le dossier de la session."))
+                self.root.after(0, lambda: messagebox.showinfo("Succès", f"Fichier '2_xliff_to_translate.xliff' créé dans le dossier de la session."))
             except Exception as e:
                 self.logger.error(f"Erreur d'export XLIFF: {e}", exc_info=True)
                 self.root.after(0, lambda e=e: messagebox.showerror("Erreur d'Export", str(e)))
             finally:
                 self._set_processing(False)
         threading.Thread(target=thread_target, daemon=True).start()
-
-    # CORRECTION DE LA LOGIQUE
+    
     def _auto_translate(self):
-        """Lance la chaîne complète : génération XLIFF -> traduction -> affichage."""
-        if not self.current_session_id:
-             return messagebox.showerror("Erreur", "Aucune session active.")
-
+        if not self.current_session_id: return messagebox.showerror("Erreur", "Aucune session active.")
         def thread_target():
             self._set_processing(True, "Lancement de la traduction automatique...")
             try:
                 # Étape 1: Générer le XLIFF en mémoire
-                page_objects = self._load_dom_from_file(self.current_session_id, "dom_analysis.json")
+                self.debug_logger.info("Auto-Traduction: Étape 1/3 - Génération du XLIFF en mémoire...")
+                page_objects = self._load_dom_from_file(self.current_session_id, "1_dom_analysis.json")
                 xliff_content = self.text_extractor.create_xliff(page_objects, self.source_lang_var.get(), self.target_lang_var.get())
+                
+                session_dir = self.session_manager.get_session_directory(self.current_session_id)
+                with open(session_dir / "2_xliff_to_translate.xliff", "w", encoding="utf-8") as f: f.write(xliff_content)
+                self.debug_logger.info("Fichier de débogage '2_xliff_to_translate.xliff' sauvegardé.")
 
                 # Étape 2: Envoyer le contenu à la traduction
+                self.debug_logger.info("Auto-Traduction: Étape 2/3 - Envoi au service de traduction...")
                 translated_xliff = self.auto_translator.translate_xliff_content(xliff_content, self.target_lang_var.get())
+                
+                with open(session_dir / "3_xliff_translated.xliff", "w", encoding="utf-8") as f: f.write(translated_xliff)
+                self.debug_logger.info("Fichier de débogage '3_xliff_translated.xliff' sauvegardé.")
 
                 # Étape 3: Mettre à jour l'interface avec le résultat
+                self.debug_logger.info("Auto-Traduction: Étape 3/3 - Affichage du résultat.")
                 self.root.after(0, lambda: self.translation_input.delete('1.0', tk.END))
                 self.root.after(0, lambda: self.translation_input.insert('1.0', translated_xliff))
                 self.root.after(0, lambda: messagebox.showinfo("Succès", "Traduction automatique terminée et insérée dans le champ de texte."))
-
             except Exception as e:
                 self.logger.error(f"Erreur de traduction automatique: {e}", exc_info=True)
+                self.debug_logger.error(f"ERREUR FATALE pendant la traduction automatique: {e}")
                 self.root.after(0, lambda e=e: messagebox.showerror("Erreur de Traduction", str(e)))
             finally:
                 self._set_processing(False)
@@ -317,8 +327,10 @@ class MainWindow:
             try:
                 translations = self.translation_parser.parse_xliff(xliff_content)
                 session_dir = self.session_manager.get_session_directory(self.current_session_id)
-                with open(session_dir / "parsed_translations.json", "w", encoding="utf-8") as f:
-                    json.dump(translations, f, indent=2)
+                
+                with open(session_dir / "4_parsed_translations.json", "w", encoding="utf-8") as f: json.dump(translations, f, indent=2)
+                self.debug_logger.info(f"Fichier de débogage '4_parsed_translations.json' sauvegardé avec {len(translations)} éléments.")
+
                 self.root.after(0, lambda: self.continue_to_layout_button.config(state='normal'))
                 self.root.after(0, lambda: messagebox.showinfo("Succès", f"{len(translations)} traductions importées avec succès."))
             except Exception as e:
@@ -328,19 +340,19 @@ class MainWindow:
                 self._set_processing(False)
         threading.Thread(target=thread_target, daemon=True).start()
 
-    # ... (le reste du fichier reste identique) ...
-
     def _process_layout(self):
         def thread_target():
             self._set_processing(True, "Calcul de la mise en page...")
             try:
-                page_objects = self._load_dom_from_file(self.current_session_id, "dom_analysis.json")
+                page_objects = self._load_dom_from_file(self.current_session_id, "1_dom_analysis.json")
                 session_dir = self.session_manager.get_session_directory(self.current_session_id)
-                with open(session_dir / "parsed_translations.json", "r", encoding="utf-8") as f:
+                with open(session_dir / "4_parsed_translations.json", "r", encoding="utf-8") as f:
                     translations = json.load(f)
                 final_pages = self.layout_processor.process_pages(page_objects, translations)
-                with open(session_dir / "final_layout.json", "w", encoding="utf-8") as f:
-                    json.dump([asdict(p) for p in final_pages], f, indent=2)
+                
+                with open(session_dir / "5_final_layout.json", "w", encoding="utf-8") as f: json.dump([asdict(p) for p in final_pages], f, indent=2)
+                self.debug_logger.info("Fichier de débogage '5_final_layout.json' sauvegardé.")
+
                 self.root.after(0, lambda: self.layout_results_text.config(state='normal'))
                 self.root.after(0, lambda: self.layout_results_text.insert('1.0', "Calcul du reflow terminé. Prêt pour l'export."))
                 self.root.after(0, lambda: self.layout_results_text.config(state='disabled'))
@@ -358,7 +370,7 @@ class MainWindow:
         def thread_target():
             self._set_processing(True, "Génération du PDF final...")
             try:
-                final_pages = self._load_dom_from_file(self.current_session_id, "final_layout.json")
+                final_pages = self._load_dom_from_file(self.current_session_id, "5_final_layout.json")
                 session_info = self.session_manager.get_session_info(self.current_session_id)
                 original_pdf_path = Path(session_info.original_pdf_path)
                 output_path = original_pdf_path.parent / output_filename
@@ -391,8 +403,10 @@ class MainWindow:
             pages.append(page_obj)
         return pages
 
-    def _open_export_folder(self):
-        if hasattr(self, '_export_folder') and self._export_folder.exists(): os.startfile(self._export_folder)
+    def _open_session_folder(self):
+        if self.current_session_id:
+            session_dir = self.session_manager.get_session_directory(self.current_session_id)
+            if session_dir and session_dir.exists(): os.startfile(session_dir)
 
     def _open_output_folder(self):
         if hasattr(self, '_output_folder') and self._output_folder.exists(): os.startfile(self._output_folder)
@@ -407,7 +421,6 @@ class ToolTip:
         self.tooltip_window = None
         widget.bind("<Enter>", self.show_tooltip)
         widget.bind("<Leave>", self.hide_tooltip)
-
     def show_tooltip(self, event):
         if self.tooltip_window or not self.text: return
         x, y, _, _ = self.widget.bbox("insert")
@@ -417,7 +430,6 @@ class ToolTip:
         tw.wm_overrideredirect(True); tw.wm_geometry(f"+{x}+{y}")
         label = tk.Label(tw, text=self.text, justify='left', background="#ffffe0", relief='solid', borderwidth=1, font=("tahoma", "8", "normal"))
         label.pack(ipadx=1)
-
     def hide_tooltip(self, event):
         if self.tooltip_window: self.tooltip_window.destroy()
         self.tooltip_window = None
