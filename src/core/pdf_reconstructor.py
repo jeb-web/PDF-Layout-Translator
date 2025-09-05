@@ -5,14 +5,15 @@ PDF Layout Translator - Moteur de Rendu PDF
 Dessine le DOM finalisé dans un nouveau fichier PDF.
 
 Auteur: L'OréalGPT
-Version: 2.0.0
+Version: 2.0.1 (Correction des imports)
 """
 import logging
 from pathlib import Path
 from typing import List
 import fitz  # PyMuPDF
-from .data_model import PageObject, TextSpan
-from ..utils.font_manager import FontManager
+# CORRECTION: Import absolu depuis la racine 'src'
+from core.data_model import PageObject, TextSpan
+from utils.font_manager import FontManager
 
 class PDFReconstructor:
     def __init__(self, font_manager: FontManager):
@@ -28,24 +29,36 @@ class PDFReconstructor:
             page = doc.new_page(width=page_data.dimensions[0], height=page_data.dimensions[1])
             
             for block in page_data.text_blocks:
-                if not block.final_bbox: continue # Ne pas dessiner si la mise en page n'a pas été calculée
+                if not block.final_bbox: continue
 
-                # Pour l'instant, on utilise insert_textbox sur le bloc entier.
-                # Une version future dessinera span par span.
+                # Stratégie simple : on concatène le texte et on utilise le style du premier span.
+                # Une version future plus avancée pourrait dessiner span par span.
                 full_text = "".join([s.translated_text if s.translated_text else s.text for s in block.spans])
                 
-                # Utiliser la police du premier span comme police principale du bloc
                 if block.spans:
                     main_span = block.spans[0]
                     font_path = self.font_manager.get_replacement_font_path(main_span.font.name)
+                    
                     if font_path and font_path.exists():
                         font_internal_name = f"F-{font_path.stem.replace(' ', '')}"
+                        try:
+                            page.insert_textbox(
+                                block.final_bbox,
+                                full_text,
+                                fontsize=main_span.font.size,
+                                fontname=font_internal_name,
+                                fontfile=str(font_path),
+                                color=fitz.utils.hex_color_to_rgb(main_span.font.color)
+                            )
+                        except Exception as e:
+                             self.logger.error(f"Erreur d'insertion de texte pour bloc {block.id}: {e}")
+                    else:
+                        self.logger.warning(f"Police de remplacement non trouvée pour '{main_span.font.name}', utilisation de Helvetica.")
                         page.insert_textbox(
                             block.final_bbox,
                             full_text,
                             fontsize=main_span.font.size,
-                            fontname=font_internal_name,
-                            fontfile=str(font_path),
+                            fontname="helv",
                             color=fitz.utils.hex_color_to_rgb(main_span.font.color)
                         )
         
