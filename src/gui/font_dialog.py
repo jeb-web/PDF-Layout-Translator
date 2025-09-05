@@ -48,7 +48,7 @@ class FontDialog:
         self.user_choices = {}
         
         self.window = tk.Toplevel(parent)
-        self.window.title("Gestion des Polices Manquantes")
+        self.window.title("Gestion des Polices Manquantes (Action Requise)")
         self.window.geometry("800x600")
         self.window.minsize(600, 400)
         self.window.transient(parent)
@@ -62,13 +62,13 @@ class FontDialog:
     def _create_widgets(self):
         main_frame = ttk.Frame(self.window, padding="10")
         main_frame.pack(fill="both", expand=True)
-        instructions = "Certaines polices sont manquantes. Choisissez un remplacement pour chacune."
-        ttk.Label(main_frame, text=instructions, wraplength=780).pack(fill="x", pady=(0, 10))
+        instructions = "ACTION REQUISE : Le PDF utilise des polices non installées. Vous devez choisir une police de remplacement pour CHAQUE ligne avant de continuer."
+        ttk.Label(main_frame, text=instructions, wraplength=780, font=("", 9, "bold")).pack(fill="x", pady=(0, 10))
         tree_frame = ttk.Frame(main_frame)
         tree_frame.pack(fill="both", expand=True)
         
         self.tree = ttk.Treeview(tree_frame, columns=("missing", "replacement"), show="headings")
-        self.tree.heading("missing", text="Police Manquante"); self.tree.heading("replacement", text="Police de Remplacement")
+        self.tree.heading("missing", text="Police Manquante"); self.tree.heading("replacement", text="Police de Remplacement (Votre Choix)")
         self.tree.pack(side="left", fill="both", expand=True)
         
         scrollbar = ttk.Scrollbar(tree_frame, orient="vertical", command=self.tree.yview)
@@ -77,21 +77,16 @@ class FontDialog:
         self.tree.bind("<Double-1>", self._on_edit_cell)
 
         button_frame = ttk.Frame(main_frame); button_frame.pack(fill="x", pady=(10, 0))
-        ttk.Button(button_frame, text="Annuler", command=self._on_cancel).pack(side="right")
-        ttk.Button(button_frame, text="Valider et Sauvegarder", command=self._on_validate).pack(side="right", padx=(0, 10))
+        ttk.Button(button_frame, text="Annuler le Processus", command=self._on_cancel).pack(side="right")
+        ttk.Button(button_frame, text="Valider et Continuer", command=self._on_validate).pack(side="right", padx=(0, 10))
 
     def _populate_fonts(self):
         for font_name in self.report['missing_fonts']:
-            # --- CORRECTION DE LA LOGIQUE DE PRÉREMPLISSAGE ---
-            # 1. Chercher un mapping déjà sauvegardé.
-            # 2. Sinon, utiliser la suggestion.
-            # 3. Sinon, utiliser "Arial".
-            suggestion = self.font_manager.get_font_mapping(font_name) \
-                         or self.report['suggestions'].get(font_name, [{}])[0].get('font_name', "Arial")
+            # On pré-remplit avec un mapping déjà sauvegardé, sinon on laisse vide pour forcer un choix.
+            suggestion = self.font_manager.get_font_mapping(font_name) or ""
             
             self.user_choices[font_name] = tk.StringVar(value=suggestion)
             self.tree.insert("", "end", values=(font_name, suggestion))
-            # --- FIN DE LA CORRECTION ---
 
     def _on_edit_cell(self, event):
         item_id = self.tree.identify_row(event.y)
@@ -102,6 +97,7 @@ class FontDialog:
         x, y, width, height = self.tree.bbox(item_id, column)
         
         combo = AutocompleteCombobox(self.tree)
+        # L'utilisateur ne peut choisir que parmi les polices que le système connaît.
         combo.set_completion_list(self.font_manager.get_all_available_fonts())
         combo.set(self.user_choices[missing_font].get())
         combo.place(x=x, y=y, width=width, height=height)
@@ -119,18 +115,54 @@ class FontDialog:
         combo.bind("<KP_Enter>", on_combo_close)
 
     def _on_validate(self):
-        try:
-            for item_id in self.tree.get_children():
-                font_name, replacement = self.tree.item(item_id, "values")
-                self.font_manager.create_font_mapping(font_name, replacement)
+        """
+        Fonction critique : Valide les choix de l'utilisateur AVANT de sauvegarder et de fermer.
+        C'est le gardien qui empêche les données invalides de continuer.
+        """
+        errors = []
+        all_system_fonts = self.font_manager.get_all_available_fonts()
+        mappings_to_save = {}
+
+        for item_id in self.tree.get_children():
+            font_name, replacement = self.tree.item(item_id, "values")
             
-            messagebox.showinfo("Succès", "Correspondances de polices sauvegardées.", parent=self.window)
-            self.window.destroy()
+            # Vérification 1: L'utilisateur a-t-il fait un choix ?
+            if not replacement or not replacement.strip():
+                errors.append(f"- Aucune police n'a été choisie pour '{font_name}'.")
+                continue
+
+            # Vérification 2: Le choix de l'utilisateur est-il une police qui existe réellement ?
+            if replacement not in all_system_fonts:
+                errors.append(f"- La police '{replacement}' choisie pour '{font_name}' n'est pas une police système valide.")
+                continue
+            
+            # Si tout est bon, on prépare la sauvegarde
+            mappings_to_save[font_name] = replacement
+
+        # Si des erreurs ont été trouvées, on bloque le processus et on informe l'utilisateur.
+        if errors:
+            error_message = "Impossible de valider. Veuillez corriger les erreurs suivantes :\n\n" + "\n".join(errors)
+            messagebox.showerror("Erreurs de Validation des Polices", error_message, parent=self.window)
+            return  # On ne ferme PAS la fenêtre. L'utilisateur doit corriger.
+
+        # Si AUCUNE erreur n'a été trouvée, on peut sauvegarder et fermer.
+        try:
+            for original_font, replacement_font in mappings_to_save.items():
+                self.font_manager.create_font_mapping(original_font, replacement_font)
+            
+            messagebox.showinfo("Succès", "Correspondances de polices validées et sauvegardées.", parent=self.window)
+            self.window.destroy() # Le processus peut continuer en toute sécurité.
         except Exception as e:
-            messagebox.showerror("Erreur", f"Une erreur est survenue: {e}", parent=self.window)
+            messagebox.showerror("Erreur", f"Une erreur est survenue lors de la sauvegarde : {e}", parent=self.window)
 
     def _on_cancel(self):
-        if messagebox.askyesno("Confirmation", "Annuler ? Les polices manquantes seront remplacées par défaut.", parent=self.window):
+        # Annuler signifie ici abandonner TOUT le processus de traduction. C'est une action bloquante.
+        if messagebox.askyesno("Confirmation d'Annulation", 
+                               "Ceci annulera l'ensemble du processus d'analyse et de traduction.\n\nÊtes-vous sûr de vouloir abandonner ?", 
+                               icon='warning', parent=self.window):
+            # Pour réellement annuler, il faudrait une communication avec la fenêtre principale.
+            # Pour l'instant, la destruction de la fenêtre arrêtera le flux.
+            self.user_choices = {} # Efface les choix
             self.window.destroy()
 
     def show(self):
