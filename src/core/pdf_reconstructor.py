@@ -2,13 +2,13 @@
 # -*- coding: utf-8 -*-
 """
 PDF Layout Translator - Moteur de Rendu PDF
-*** VERSION CORRIGÉE ***
+*** VERSION FINALE - Rendu Span par Span ***
 """
 import logging
 from pathlib import Path
 from typing import List, Tuple
 import fitz
-from core.data_model import PageObject
+from core.data_model import PageObject, TextSpan
 from utils.font_manager import FontManager
 
 class PDFReconstructor:
@@ -30,44 +30,67 @@ class PDFReconstructor:
             return (0, 0, 0)
 
     def render_pages(self, pages: List[PageObject], output_path: Path):
-        self.debug_logger.info("--- Début du Rendu PDF (Avec Correction du Texte) ---")
+        self.debug_logger.info("--- Début du Rendu PDF (Mode Span-par-Span) ---")
         doc = fitz.open()
+        
         for page_data in pages:
-            self.debug_logger.info(f"Rendu de la page {page_data.page_number}...")
             page = doc.new_page(width=page_data.dimensions[0], height=page_data.dimensions[1])
             
             for block in page_data.text_blocks:
-                if not block.final_bbox: 
-                    self.debug_logger.warning(f"  - Bloc {block.id} ignoré : pas de Bbox finale.")
+                if not block.final_bbox or not block.spans:
                     continue
-
-                # --- CORRECTION FINALE : Joindre les textes avec un espace ---
-                full_text = " ".join([s.text.strip() for s in block.spans if s.text])
-                # --- FIN DE LA CORRECTION ---
-
-                self.debug_logger.info(f"  -> Rendu du bloc {block.id} avec texte: '{full_text[:70]}...'")
                 
-                if block.spans:
-                    main_span = block.spans[0]
-                    font_path = self.font_manager.get_replacement_font_path(main_span.font.name)
-                    color_rgb = self._hex_to_rgb(main_span.font.color)
+                # On utilise un "Shape" (canevas) pour un contrôle total sur le dessin
+                with page.new_shape(block.final_bbox) as shape:
+                    current_x = 0
+                    current_y = 0 # Le (0,0) est relatif au coin supérieur gauche de la bbox
+                    line_height = 0
+                    max_font_size_in_line = 0
 
-                    if font_path and font_path.exists():
-                        font_internal_name = f"F-{font_path.stem.replace(' ', '')}"
-                        try:
-                            # Utilisation de la final_bbox maintenant que le texte est correct
-                            page.insert_textbox(block.final_bbox, full_text, fontsize=main_span.font.size,
-                                                fontname=font_internal_name, fontfile=str(font_path), color=color_rgb)
-                            self.debug_logger.info(f"     Bloc inséré avec police '{font_path.name}' et couleur {color_rgb}.")
-                        except Exception as e:
-                             self.logger.error(f"Erreur d'insertion texte bloc {block.id}: {e}")
-                             self.debug_logger.error(f"     ERREUR d'insertion texte bloc {block.id}: {e}")
-                    else:
-                        self.logger.warning(f"Police de remplacement non trouvée pour '{main_span.font.name}', utilisant Helvetica.")
-                        self.debug_logger.warning(f"     Police de remplacement non trouvée pour '{main_span.font.name}', utilisant Helvetica.")
-                        page.insert_textbox(block.final_bbox, full_text, fontsize=main_span.font.size,
-                                            fontname="helv", color=color_rgb)
-        
+                    all_words = []
+                    for span in block.spans:
+                        words = span.text.split(' ')
+                        for i, word in enumerate(words):
+                            word_with_space = word + (' ' if i < len(words) - 1 else '')
+                            all_words.append((word_with_space, span))
+
+                    if not all_words: continue
+
+                    # La première ligne commence avec la hauteur de la première police
+                    max_font_size_in_line = all_words[0][1].font.size
+                    line_height = max_font_size_in_line * 1.2
+                    current_y = max_font_size_in_line # Position de la ligne de base
+
+                    for word, span in all_words:
+                        font_path = self.font_manager.get_replacement_font_path(span.font.name)
+                        if not (font_path and font_path.exists()):
+                            self.logger.warning(f"Police non trouvée pour '{span.font.name}', rendu du mot '{word}' ignoré.")
+                            continue
+                        
+                        word_width = fitz.get_text_length(word, fontname=str(font_path), fontsize=span.font.size)
+                        
+                        # Retour à la ligne si le mot dépasse
+                        if current_x + word_width > block.final_bbox[2] - block.final_bbox[0] and current_x > 0:
+                            current_x = 0
+                            current_y += line_height
+                            max_font_size_in_line = span.font.size
+                            line_height = max_font_size_in_line * 1.2
+                        
+                        # Mise à jour de la hauteur de ligne si une police plus grande apparaît sur la même ligne
+                        if span.font.size > max_font_size_in_line:
+                            max_font_size_in_line = span.font.size
+                            line_height = max_font_size_in_line * 1.2
+                        
+                        # Dessin du mot avec son propre style
+                        shape.insert_text(
+                            (current_x, current_y),
+                            word,
+                            fontname=str(font_path),
+                            fontsize=span.font.size,
+                            color=self._hex_to_rgb(span.font.color)
+                        )
+                        current_x += word_width
+
         doc.save(output_path, garbage=4, deflate=True)
         doc.close()
-        self.debug_logger.info(f"--- Rendu PDF CORRIGÉ Terminé. Fichier sauvegardé: {output_path} ---")
+        self.debug_logger.info(f"--- Rendu PDF (Mode Span-par-Span) Terminé. Fichier: {output_path} ---")
