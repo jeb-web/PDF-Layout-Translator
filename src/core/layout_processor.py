@@ -1,119 +1,95 @@
 #!/usr/bin/env python3
 # -*- coding: utf-8 -*-
 """
-PDF Layout Translator - Processeur de mise en page
-Gestion des ajustements de mise en page pour le texte traduit
+PDF Layout Translator - Moteur de Mise en Page
+Calcule le "reflow" du texte et ajuste les boîtes de délimitation.
 
 Auteur: L'OréalGPT
-Version: 1.0.0
+Version: 2.0.0
 """
-
 import logging
-import math
-from typing import Dict, List, Any, Tuple
-from dataclasses import dataclass, field
-from datetime import datetime
-
-@dataclass
-class LayoutConstraints:
-    min_font_size: float = 8.0
-    max_font_reduction_percent: float = 20.0
-
-@dataclass
-class ElementLayout:
-    element_id: str
-    page_number: int
-    original_bbox: Tuple[float, float, float, float]
-    new_bbox: Tuple[float, float, float, float]
-    original_font_size: float
-    new_font_size: float
-    original_font_name: str
-    content_type: str
-    translated_text: str
-    expansion_factor: float
-    layout_constraints: LayoutConstraints
-    issues: List[Any] = field(default_factory=list)
+from typing import List, Dict, Tuple
+from .data_model import PageObject
+from ..utils.font_manager import FontManager
+from fontTools.ttLib import TTFont
 
 class LayoutProcessor:
-    def __init__(self, config_manager=None):
+    def __init__(self, font_manager: FontManager):
         self.logger = logging.getLogger(__name__)
-        self.char_width_factor = 0.6
-    
-    def process_layout(self, validated_translations: Dict[str, Any],
-                      original_analysis_data: Dict[str, Any]) -> Dict[str, Any]:
-        self.logger.info("Début du traitement de mise en page")
-        try:
-            element_layouts = self._create_element_layouts(validated_translations, original_analysis_data)
-            return {
-                'element_layouts': self._serialize_layouts(element_layouts),
-                'quality_metrics': {'overall_quality': 0.95, 'quality_level': 'excellent'}
-            }
-        except Exception as e:
-            self.logger.error(f"Erreur lors du traitement de mise en page: {e}", exc_info=True)
-            raise
-    
-    def _create_element_layouts(self, validated_translations: Dict[str, Any],
-                              original_analysis_data: Dict[str, Any]) -> List[ElementLayout]:
-        element_layouts = []
-        translations = validated_translations['translations']
-        original_elements = {elem['id']: elem for elem in original_analysis_data['text_elements']}
-        
-        for element_id, translation_data in translations.items():
-            if element_id in original_elements:
-                original_element = original_elements[element_id]
-                layout = self._create_single_element_layout(element_id, original_element, translation_data)
-                element_layouts.append(layout)
-        
-        return element_layouts
+        self.font_manager = font_manager
+        self.font_cache = {}
 
-    def _create_single_element_layout(self, element_id: str, original_element: Dict[str, Any],
-                                    translation_data: Dict[str, Any]) -> ElementLayout:
+    def _get_font(self, font_name: str):
+        """Met en cache les objets TTFont pour la mesure."""
+        if font_name in self.font_cache:
+            return self.font_cache[font_name]
         
-        original_bbox = tuple(original_element['bbox'])
-        original_font_info = original_element['font_info']
-        original_font_size = original_font_info['size']
-        constraints = LayoutConstraints()
+        font_path = self.font_manager.get_replacement_font_path(font_name)
+        if font_path and font_path.exists():
+            try:
+                font = TTFont(font_path)
+                self.font_cache[font_name] = font
+                return font
+            except Exception as e:
+                self.logger.error(f"Impossible de charger la police {font_path}: {e}")
+        return None
 
-        new_font_size = self._calculate_optimal_font_size(
-            translation_data['translated_text'], original_bbox, original_font_size, constraints
-        )
+    def _get_text_width(self, text: str, font_name: str, font_size: float) -> float:
+        """Calcule la largeur d'une chaîne de texte avec une police donnée."""
+        font = self._get_font(font_name)
+        if not font:
+            return len(text) * font_size * 0.6  # Estimation grossière
+
+        cmap = font.getBestCmap()
+        glyph_set = font.getGlyphSet()
+        total_width = 0
+        for char in text:
+            if ord(char) in cmap:
+                glyph_name = cmap[ord(char)]
+                total_width += glyph_set[glyph_name].width
         
-        return ElementLayout(
-            element_id=element_id,
-            page_number=original_element['page_number'],
-            original_bbox=original_bbox,
-            new_bbox=original_bbox,
-            original_font_size=original_font_size,
-            new_font_size=new_font_size,
-            original_font_name=original_font_info['name'],
-            content_type=original_element['content_type'],
-            translated_text=translation_data['translated_text'],
-            expansion_factor=translation_data['expansion_factor'],
-            layout_constraints=constraints
-        )
+        return (total_width / font['head'].unitsPerEm) * font_size
 
-    def _calculate_optimal_font_size(self, text: str, bbox: Tuple[float, float, float, float],
-                                   original_font_size: float, constraints: LayoutConstraints) -> float:
-        available_width = bbox[2] - bbox[0]
-        if available_width <= 0: return original_font_size
-        estimated_width = len(text) * original_font_size * self.char_width_factor
+    def process_pages(self, pages: List[PageObject], translations: Dict[str, str]) -> List[PageObject]:
+        """Met à jour le DOM avec les traductions et calcule le reflow."""
+        self.logger.info("Début du traitement de la mise en page (reflow).")
         
-        new_font_size = original_font_size
-        if estimated_width > available_width:
-            new_font_size = original_font_size * (available_width / estimated_width)
+        # Étape 1: Mettre à jour le texte des spans
+        for page in pages:
+            for block in page.text_blocks:
+                for span in block.spans:
+                    if span.id in translations:
+                        span.translated_text = translations[span.id]
 
-        min_allowed_size = original_font_size * (1 - (constraints.max_font_reduction_percent / 100))
-        return max(new_font_size, min_allowed_size)
+        # Étape 2: Calculer le reflow pour chaque bloc
+        for page in pages:
+            for block in block.spans:
+                # Cette partie est très complexe et nécessite un algorithme de reflow complet.
+                # Pour cette phase, nous allons adopter une stratégie simple :
+                # - On calcule la nouvelle hauteur nécessaire.
+                # - On met à jour la bbox finale.
+                
+                original_width = block.bbox[2] - block.bbox[0]
+                current_x = 0
+                current_y = block.spans[0].font.size if block.spans else 0
+                line_height_factor = 1.2
+                
+                for span in block.spans:
+                    text_to_process = span.translated_text if span.translated_text else span.text
+                    words = text_to_process.split(' ')
+                    
+                    for word in words:
+                        word_width = self._get_text_width(word + ' ', span.font.name, span.font.size)
+                        if current_x + word_width > original_width:
+                            current_x = 0
+                            current_y += span.font.size * line_height_factor
+                        current_x += word_width
+                
+                new_height = current_y
+                block.final_bbox = (block.bbox[0], block.bbox[1], block.bbox[2], block.bbox[1] + new_height)
+        
+        # Étape 3: Gérer les superpositions (simplifié pour l'instant)
+        # Dans une future phase, nous décalerions les blocs vers le bas.
 
-    def _serialize_layouts(self, layouts: List[ElementLayout]) -> List[Dict[str, Any]]:
-        return [
-            {
-                'element_id': layout.element_id,
-                'page_number': layout.page_number,
-                'original_bbox': layout.original_bbox,
-                'new_bbox': layout.new_bbox,
-                'new_font_size': layout.new_font_size,
-                'original_font_name': layout.original_font_name,
-                'content_type': layout.content_type
-            } for layout in layouts
-        ]
+        self.logger.info("Traitement de la mise en page terminé.")
+        return pages
