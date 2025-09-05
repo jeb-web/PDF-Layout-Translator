@@ -63,7 +63,7 @@ class PDFReconstructor:
                         
                         # --- CORRECTION DE L'ERREUR ---
                         # get_text_length UTILISE 'fontname'
-                        word_width = fitz.get_text_length(word_to_draw, fontname=str(font_path), fontsize=span.font.size)
+                        word_width = fitz.get_text_length(word_to_draw, fontfile=str(font_path), fontsize=span.font.size)
                         
                         if current_pos.x + word_width > block_bbox.x1 and current_pos.x > block_bbox.x0:
                             current_pos.x = block_bbox.x0
@@ -93,3 +93,4 @@ class PDFReconstructor:
         doc.save(output_path, garbage=4, deflate=True)
         doc.close()
         self.debug_logger.info(f"--- Rendu PDF (Version Corrigée) Terminé. ---")
+
