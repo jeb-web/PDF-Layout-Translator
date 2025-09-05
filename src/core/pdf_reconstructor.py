@@ -2,7 +2,7 @@
 # -*- coding: utf-8 -*-
 """
 PDF Layout Translator - Moteur de Rendu PDF
-*** VERSION FINALE - La seule qui fonctionne ***
+*** CORRECTION FINALE ***
 """
 import logging
 from pathlib import Path
@@ -30,7 +30,7 @@ class PDFReconstructor:
             return (0, 0, 0)
             
     def render_pages(self, pages: List[PageObject], output_path: Path):
-        self.debug_logger.info("--- Début du Rendu PDF (Version Finale) ---")
+        self.debug_logger.info("--- Début du Rendu PDF (Version Corrigée) ---")
         doc = fitz.open()
         
         for page_data in pages:
@@ -40,10 +40,9 @@ class PDFReconstructor:
                 if not block.final_bbox or not block.spans:
                     continue
                 
-                block_bbox = fitz.Rect(block.final_bbox)
-                
-                # On utilise une Shape pour dessiner, c'est la méthode la plus fiable
                 shape = page.new_shape()
+                
+                block_bbox = fitz.Rect(block.final_bbox)
                 
                 if not block.spans: continue
                 
@@ -55,13 +54,16 @@ class PDFReconstructor:
                     
                     font_path = self.font_manager.get_replacement_font_path(span.font.name)
                     if not (font_path and font_path.exists()):
+                        self.logger.warning(f"Police non trouvée pour '{span.font.name}', rendu ignoré.")
                         continue
                     
                     words = span.text.strip().split(' ')
                     for i, word in enumerate(words):
                         word_to_draw = word + (' ' if i < len(words) - 1 else '')
                         
-                        word_width = fitz.get_text_length(word_to_draw, fontfile=str(font_path), fontsize=span.font.size)
+                        # --- CORRECTION DE L'ERREUR ---
+                        # get_text_length UTILISE 'fontname'
+                        word_width = fitz.get_text_length(word_to_draw, fontname=str(font_path), fontsize=span.font.size)
                         
                         if current_pos.x + word_width > block_bbox.x1 and current_pos.x > block_bbox.x0:
                             current_pos.x = block_bbox.x0
@@ -71,10 +73,10 @@ class PDFReconstructor:
                         if span.font.size > max_font_size_in_line:
                             max_font_size_in_line = span.font.size
 
-                        if current_pos.y > block_bbox.y1 + 5: # Marge de tolérance
+                        if current_pos.y > block_bbox.y1 + 5:
                             break
 
-                        # shape.insert_text est la bonne méthode et elle accepte 'color'
+                        # insert_text UTILISE 'fontfile'
                         shape.insert_text(
                             current_pos,
                             word_to_draw,
@@ -90,4 +92,4 @@ class PDFReconstructor:
 
         doc.save(output_path, garbage=4, deflate=True)
         doc.close()
-        self.debug_logger.info(f"--- Rendu PDF (Version Finale) Terminé. ---")
+        self.debug_logger.info(f"--- Rendu PDF (Version Corrigée) Terminé. ---")
