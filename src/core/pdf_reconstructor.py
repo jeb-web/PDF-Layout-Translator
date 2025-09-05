@@ -2,7 +2,7 @@
 # -*- a: utf-8 -*-
 """
 PDF Layout Translator - Moteur de Rendu PDF
-*** VERSION FINALE - LA SEULE VÉRITÉ : LE BUFFER ***
+*** VERSION DÉFINITIVE - PRISE DE CONTRÔLE DU NOMMAGE DES POLICES ***
 """
 import logging
 from pathlib import Path
@@ -16,7 +16,7 @@ class PDFReconstructor:
         self.logger = logging.getLogger(__name__)
         self.debug_logger = logging.getLogger('debug_trace')
         self.font_manager = font_manager
-        # Le seul cache nécessaire : celui des objets Font créés à partir d'un buffer.
+        # Ce cache est global et ne stocke que les objets Font pour la mesure.
         self.font_object_cache: Dict[Path, fitz.Font] = {}
 
     def _hex_to_rgb(self, hex_color: str) -> Tuple[float, float, float]:
@@ -37,6 +37,11 @@ class PDFReconstructor:
             self.debug_logger.info(f"\n--- [PAGE {page_data.page_number}] ---")
             page = doc.new_page(width=page_data.dimensions[0], height=page_data.dimensions[1])
             
+            # --- CONTRÔLE TOTAL DES POLICES ---
+            # Chaque page a son propre dictionnaire de polices. C'est la clé.
+            page_font_map: Dict[Path, str] = {}
+            font_counter = 0
+
             for block in page_data.text_blocks:
                 if not block.final_bbox or not block.spans: continue
                 
@@ -54,24 +59,23 @@ class PDFReconstructor:
                     if not (font_path and font_path.exists()): continue
                     
                     try:
-                        # --- ARCHITECTURE UNIFIÉE ET INSTRUMENTÉE ---
-                        self.debug_logger.info(f"    - [SPAN {span.id}] Début de traitement pour la police '{font_path.name}'.")
-
-                        # ÉTAPE 1: Chargement de l'objet Font via BUFFER (la seule méthode fiable)
+                        # ÉTAPE 1: MESURE (utilise le cache global d'objets Font)
                         if font_path not in self.font_object_cache:
-                            self.debug_logger.info(f"      [CACHE-MISS] Lecture du fichier '{font_path}' en buffer.")
                             font_buffer = font_path.read_bytes()
-                            self.debug_logger.info(f"      -> Buffer lu : {len(font_buffer)} bytes.")
-                            self.debug_logger.info(f"      -> Appel de fitz.Font(fontbuffer=...).")
                             self.font_object_cache[font_path] = fitz.Font(fontbuffer=font_buffer)
-                            self.debug_logger.info(f"      -> Objet Font créé et mis en cache avec succès.")
                         font_object = self.font_object_cache[font_path]
+
+                        # ÉTAPE 2: DESSIN (utilise le mapping de la page courante)
+                        if font_path not in page_font_map:
+                            # Nous créons notre propre nom de référence, simple et fiable.
+                            font_ref_name = f"F{font_counter}"
+                            self.debug_logger.info(f"    - [SPAN {span.id}] PREMIÈRE UTILISATION de '{font_path.name}' sur cette page. Assignation du nom de référence '{font_ref_name}'.")
+                            # Nous forçons PyMuPDF à utiliser notre nom.
+                            page.insert_font(fontname=font_ref_name, fontbuffer=font_object.buffer)
+                            page_font_map[font_path] = font_ref_name
+                            font_counter += 1
                         
-                        # ÉTAPE 2: Insertion de la police dans la page via BUFFER
-                        self.debug_logger.info(f"      -> Appel de page.insert_font(fontname='{font_path.stem}', fontbuffer=...).")
-                        # Nous utilisons le buffer de l'objet Font déjà chargé pour une cohérence parfaite.
-                        font_ref_name = page.insert_font(fontname=font_path.stem, fontbuffer=font_object.buffer)
-                        self.debug_logger.info(f"      -> Police insérée. Référence obtenue : '{font_ref_name}'.")
+                        font_ref_name_for_drawing = page_font_map[font_path]
 
                     except Exception as e:
                         self.logger.error(f"    - [SPAN {span.id}] ERREUR FATALE LORS DE LA PRÉPARATION DE LA POLICE '{font_path.name}': {e}", exc_info=True)
@@ -81,6 +85,7 @@ class PDFReconstructor:
                     for i, word in enumerate(words):
                         word_to_draw = word + (' ' if i < len(words) - 1 else '')
                         
+                        # La mesure se fait avec l'objet Font, c'est fiable.
                         word_width = font_object.text_length(word_to_draw, fontsize=span.font.size)
                         
                         if current_pos.x + word_width > block_bbox.x1 and current_pos.x > block_bbox.x0:
@@ -90,9 +95,10 @@ class PDFReconstructor:
                         if span.font.size > max_font_size_in_line: max_font_size_in_line = span.font.size
                         if current_pos.y > block_bbox.y1 + 5: break
 
+                        # Le dessin se fait avec notre nom de référence fiable.
                         shape.insert_text(
                             current_pos, word_to_draw,
-                            fontname=str(font_ref_name),
+                            fontname=font_ref_name_for_drawing,
                             fontsize=span.font.size,
                             color=self._hex_to_rgb(span.font.color)
                         )
