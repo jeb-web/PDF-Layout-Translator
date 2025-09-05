@@ -5,7 +5,7 @@ PDF Layout Translator - Analyseur de PDF
 Construit un DOM de la page à partir du fichier PDF.
 
 Auteur: L'OréalGPT
-Version: 2.0.0
+Version: 2.0.1 (Correction des imports)
 """
 
 import logging
@@ -13,7 +13,8 @@ import re
 from pathlib import Path
 from typing import Dict, List, Any
 import fitz  # PyMuPDF
-from .data_model import PageObject, TextBlock, TextSpan, FontInfo
+# CORRECTION: Import absolu depuis la racine 'src'
+from core.data_model import PageObject, TextBlock, TextSpan, FontInfo
 
 class PDFAnalyzer:
     def __init__(self):
