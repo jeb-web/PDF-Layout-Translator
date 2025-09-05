@@ -1,140 +1,54 @@
 #!/usr/bin/env python3
 # -*- coding: utf-8 -*-
 """
-PDF Layout Translator - Reconstructeur de PDF
-Reconstruction du PDF final avec texte traduit et mise en page ajustée
+PDF Layout Translator - Moteur de Rendu PDF
+Dessine le DOM finalisé dans un nouveau fichier PDF.
 
 Auteur: L'OréalGPT
-Version: 1.0.3 (Correction de l'embarquement de la police)
+Version: 2.0.0
 """
-
 import logging
-import fitz  # PyMuPDF
 from pathlib import Path
-from typing import Dict, List, Any, Optional
-from datetime import datetime
-from dataclasses import dataclass
-import re
-
-@dataclass
-class ReconstructionResult:
-    success: bool; output_path: Optional[Path]; processing_time: float; pages_processed: int
-    elements_processed: int; elements_ignored: int; errors: List[str]; warnings: List[str]
+from typing import List
+import fitz  # PyMuPDF
+from .data_model import PageObject, TextSpan
+from ..utils.font_manager import FontManager
 
 class PDFReconstructor:
-    def __init__(self, config_manager=None, font_manager=None):
+    def __init__(self, font_manager: FontManager):
         self.logger = logging.getLogger(__name__)
         self.font_manager = font_manager
 
-    def reconstruct_pdf(self, original_pdf_path: Path, layout_data: Dict[str, Any],
-                       validated_translations: Dict[str, Any], output_path: Path,
-                       preserve_original: bool = True) -> ReconstructionResult:
-        start_time = datetime.now()
-        errors, warnings = [], []
-        pages_processed, elements_processed, elements_ignored = 0, 0, 0
-        
-        try:
-            original_doc = fitz.open(original_pdf_path)
-            output_doc = fitz.open()
+    def render_pages(self, pages: List[PageObject], output_path: Path):
+        """Crée un PDF à partir de la liste d'objets PageObject."""
+        self.logger.info(f"Début du rendu vers le fichier PDF : {output_path}")
+        doc = fitz.open()
+
+        for page_data in pages:
+            page = doc.new_page(width=page_data.dimensions[0], height=page_data.dimensions[1])
             
-            for page_num in range(len(original_doc)):
-                page_result = self._process_page(original_doc, page_num, output_doc, layout_data, validated_translations)
-                pages_processed += 1
-                elements_processed += page_result['elements_processed']
-                elements_ignored += page_result['elements_ignored']
-                warnings.extend(page_result['warnings'])
+            for block in page_data.text_blocks:
+                if not block.final_bbox: continue # Ne pas dessiner si la mise en page n'a pas été calculée
 
-            if len(output_doc) > 0:
-                output_doc.save(output_path, garbage=4, deflate=True, clean=True)
-            else:
-                warnings.append("Le document de sortie est vide.")
-
-            original_doc.close(); output_doc.close()
-            
-            return ReconstructionResult(
-                success=True, output_path=output_path, processing_time=(datetime.now() - start_time).total_seconds(),
-                pages_processed=pages_processed, elements_processed=elements_processed,
-                elements_ignored=elements_ignored, errors=errors, warnings=warnings
-            )
-        except Exception as e:
-            self.logger.error(f"Erreur critique lors de la reconstruction: {e}", exc_info=True)
-            return ReconstructionResult(
-                success=False, output_path=None, processing_time=0,
-                pages_processed=0, elements_processed=0, elements_ignored=len(layout_data.get('element_layouts', [])),
-                errors=[str(e)], warnings=[]
-            )
-
-    def _process_page(self, original_doc, page_num: int, output_doc,
-                     layout_data: Dict[str, Any], validated_translations: Dict[str, Any]) -> Dict[str, Any]:
+                # Pour l'instant, on utilise insert_textbox sur le bloc entier.
+                # Une version future dessinera span par span.
+                full_text = "".join([s.translated_text if s.translated_text else s.text for s in block.spans])
+                
+                # Utiliser la police du premier span comme police principale du bloc
+                if block.spans:
+                    main_span = block.spans[0]
+                    font_path = self.font_manager.get_replacement_font_path(main_span.font.name)
+                    if font_path and font_path.exists():
+                        font_internal_name = f"F-{font_path.stem.replace(' ', '')}"
+                        page.insert_textbox(
+                            block.final_bbox,
+                            full_text,
+                            fontsize=main_span.font.size,
+                            fontname=font_internal_name,
+                            fontfile=str(font_path),
+                            color=fitz.utils.hex_color_to_rgb(main_span.font.color)
+                        )
         
-        page_number = page_num + 1
-        output_doc.insert_pdf(original_doc, from_page=page_num, to_page=page_num)
-        new_page = output_doc[page_num]
-
-        elements_on_page = self._get_page_text_elements(page_number, layout_data, validated_translations)
-        processed_count, ignored_count = 0, 0
-        warnings = []
-        
-        valid_elements = []
-        for element in elements_on_page:
-            if 'original_bbox' in element and 'new_bbox' in element:
-                valid_elements.append(element)
-            else:
-                ignored_count += 1
-                warnings.append(f"Élément {element.get('element_id', 'N/A')} ignoré : données de position manquantes.")
-        
-        for element in valid_elements:
-            new_page.add_redact_annot(fitz.Rect(element['original_bbox']))
-        if valid_elements:
-            new_page.apply_redactions()
-
-        for element in valid_elements:
-            self._place_translated_text(new_page, element)
-            processed_count += 1
-
-        return {'elements_processed': processed_count, 'elements_ignored': ignored_count, 'warnings': warnings}
-
-    def _get_page_text_elements(self, page_number: int, layout_data: Dict[str, Any], validated_translations: Dict[str, Any]) -> List[Dict[str, Any]]:
-        layouts = {elem['element_id']: elem for elem in layout_data.get('element_layouts', [])}
-        elements = []
-        for elem_id, layout_info in layouts.items():
-            if layout_info.get('page_number') == page_number and elem_id in validated_translations['translations']:
-                full_info = layout_info.copy(); full_info.update(validated_translations['translations'][elem_id])
-                elements.append(full_info)
-        return elements
-    
-    def _place_translated_text(self, page, element_layout: Dict[str, Any]):
-        raw_translated_text = element_layout.get('translated_text', '')
-        if not raw_translated_text: return
-
-        text_to_render = re.sub(r'\*+', '', raw_translated_text)
-        rect = fitz.Rect(element_layout['new_bbox'])
-        font_size = element_layout['new_font_size']
-        align = self._get_text_alignment(element_layout)
-        original_font_name = element_layout.get('original_font_name', 'Arial')
-        
-        font_path = self.font_manager.get_replacement_font_path(original_font_name)
-        
-        if font_path and font_path.exists():
-            # Créer un nom de police unique pour le PDF, basé sur le nom du fichier
-            # C'est la garantie que chaque police personnalisée est unique.
-            font_internal_name = f"F-{font_path.stem.replace(' ', '')}"
-            
-            # CORRECTION FINALE : Ajouter le paramètre 'fontname'
-            page.insert_textbox(rect, text_to_render, 
-                                     fontsize=font_size, 
-                                     fontfile=str(font_path), 
-                                     fontname=font_internal_name, # Le paramètre manquant
-                                     align=align)
-        else:
-            self.logger.warning(f"Aucun fichier de police trouvé pour '{original_font_name}', utilisation de Helvetica.")
-            page.insert_textbox(rect, text_to_render, 
-                                     fontsize=font_size, 
-                                     fontname="helv", 
-                                     align=align)
-
-    def _get_text_alignment(self, element_layout: Dict[str, Any]) -> int:
-        content_type = element_layout.get('content_type', 'paragraph')
-        if content_type in ['title', 'subtitle', 'header', 'footer']:
-            return fitz.TEXT_ALIGN_CENTER
-        return fitz.TEXT_ALIGN_LEFT
+        doc.save(output_path, garbage=4, deflate=True)
+        doc.close()
+        self.logger.info("Rendu PDF terminé.")
