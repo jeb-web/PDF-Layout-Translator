@@ -2,7 +2,7 @@
 # -*- a: utf-8 -*-
 """
 PDF Layout Translator - Moteur de Rendu PDF
-*** VERSION FINALE - ENTIÈREMENT INSTRUMENTÉE POUR LA TRACE ***
+*** VERSION FINALE - CORRECTION DU TYPAGE DE LA RÉFÉRENCE DE POLICE ***
 """
 import logging
 from pathlib import Path
@@ -68,8 +68,9 @@ class PDFReconstructor:
                         if font_path not in self.font_ref_cache:
                             self.debug_logger.info(f"        -> [CACHE] Police non trouvée dans le cache. Insertion dans le PDF...")
                             font_ref = page.insert_font(fontfile=str(font_path), fontname=font_path.stem)
-                            self.font_ref_cache[font_path] = font_ref
-                            self.debug_logger.info(f"          -> Police insérée. Référence obtenue : '{font_ref}'")
+                            # --- BLINDAGE CONTRE LE RETOUR D'UN ENTIER ---
+                            self.font_ref_cache[font_path] = str(font_ref) # Conversion systématique en string
+                            self.debug_logger.info(f"          -> Police insérée. Référence obtenue : '{font_ref}' (type: {type(font_ref).__name__})")
                         
                         font_ref_name = self.font_ref_cache[font_path]
                         self.debug_logger.info(f"        -> [CACHE] Utilisation de la référence de police : '{font_ref_name}'")
@@ -91,7 +92,6 @@ class PDFReconstructor:
                         if span.font.size > max_font_size_in_line: max_font_size_in_line = span.font.size
                         if current_pos.y > block_bbox.y1 + 5: break
 
-                        # La trace de preuve finale
                         self.debug_logger.info(f"          -> [DESSIN] Mot: '{word_to_draw}', Police: '{font_ref_name}', Taille: {span.font.size}")
                         shape.insert_text(
                             current_pos,
