@@ -255,7 +255,6 @@ class MainWindow:
         summary = f"Analyse terminée.\n- Pages: {len(page_objects)}\n- Blocs de texte: {total_blocks}\n- Segments de style (spans): {total_spans}"
         self.analysis_text.config(state='normal'); self.analysis_text.delete('1.0', tk.END); self.analysis_text.insert('1.0', summary); self.analysis_text.config(state='disabled')
         
-        # CORRECTION DE LA RÉGRESSION: Boucle correcte pour extraire les polices
         required_fonts = {span.font.name for page in page_objects for block in page.text_blocks for span in block.spans}
         
         font_report = self.font_manager.check_fonts_availability(list(required_fonts))
@@ -367,7 +366,6 @@ class MainWindow:
                     translated_text = translations.get(span.id)
                     if translated_text and translated_text.strip():
                         span.text = translated_text
-                    # Si pas de traduction ou si elle est vide, on garde le texte original
         self.debug_logger.info("'Version à Rendre' créée : le texte de chaque segment est maintenant final.")
         return render_pages
 
