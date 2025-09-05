@@ -1,0 +1,10 @@
+# Dépendances de développement pour PDF-Layout-Translator
+# A installer avec: pip install -r requirements-dev.txt
+
+# Inclure les dépendances de production
+-r requirements.txt
+
+# Outils de développement et de compilation
+pytest>=7.4.3
+flake8>=6.1.0
+pyinstaller>=6.3.0
