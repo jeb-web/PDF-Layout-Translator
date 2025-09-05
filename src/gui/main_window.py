@@ -16,6 +16,7 @@ from pathlib import Path
 from typing import Dict, Any, Optional
 from datetime import datetime
 import json
+import os # Ajout pour ouvrir le fichier de log
 
 # Imports des modules core
 from core.session_manager import SessionManager, SessionStatus
@@ -70,24 +71,44 @@ class MainWindow:
         x = (self.root.winfo_screenwidth() // 2) - (1200 // 2)
         y = (self.root.winfo_screenheight() // 2) - (800 // 2)
         self.root.geometry(f"1200x800+{x}+{y}")
+
+    def _setup_debug_logger(self, session_id: str):
+        """Configure un logger dédié pour la trace de débogage de la session."""
+        debug_logger = logging.getLogger('debug_trace')
+        debug_logger.setLevel(logging.INFO)
+        debug_logger.propagate = False # Pour ne pas dupliquer dans le log principal
+
+        # Nettoyer les anciens handlers pour éviter d'écrire dans les fichiers des sessions précédentes
+        if debug_logger.hasHandlers():
+            debug_logger.handlers.clear()
+
+        session_dir = self.session_manager.get_session_directory(session_id)
+        if session_dir:
+            log_file = session_dir / "debug_session_trace.log"
+            handler = logging.FileHandler(log_file, mode='w', encoding='utf-8')
+            formatter = logging.Formatter('%(asctime)s - %(message)s')
+            handler.setFormatter(formatter)
+            debug_logger.addHandler(handler)
+            debug_logger.info("--- Début de la trace de débogage pour la session %s ---", session_id)
+        else:
+            self.logger.error("Impossible de configurer le logger de débogage : répertoire de session non trouvé.")
         
     def _post_analysis_step(self, analysis_data):
         """Ce qui se passe après une analyse réussie, y compris la validation des polices."""
+        debug_logger = logging.getLogger('debug_trace')
         self._display_analysis_results(analysis_data)
         
         required_fonts = [font['name'] for font in analysis_data.get('fonts_used', [])]
         
-        # AJOUT POUR DEBUG
-        print(f"[DEBUG-GUI] Polices envoyées au FontManager pour vérification : {required_fonts}")
+        # LOG POUR DEBUG
+        debug_logger.info(f"[DEBUG-GUI] Polices envoyées au FontManager pour vérification : {required_fonts}")
         
-        # --- CORRECTION : Supprimer le filtrage prématuré. On envoie la liste complète au FontManager. ---
-        # L'ancienne ligne "fonts_to_check = ..." a été supprimée.
         font_report = self.font_manager.check_fonts_availability(required_fonts)
 
         if not font_report['all_available']:
             self.logger.info(f"Polices manquantes détectées: {font_report['missing_fonts']}")
             font_dialog = FontDialog(self.root, self.font_manager, font_report)
-            font_dialog.show() # Attend que l'utilisateur ait fait ses choix
+            font_dialog.show()
         
         self._update_global_progress(2, "Analyse terminée, polices validées")
         self.continue_to_translation_button.config(state='normal')
@@ -132,7 +153,6 @@ class MainWindow:
         self.progress_label = ttk.Label(progress_frame, text="Prêt", style='Status.TLabel')
         self.progress_label.pack(side='right', padx=(10, 0))
 
-    # ... (les autres fonctions _create_..._tab restent identiques) ...
     def _create_home_tab(self):
         self.home_frame = ttk.Frame(self.notebook)
         self.notebook.add(self.home_frame, text="🏠 Accueil")
@@ -359,6 +379,11 @@ class MainWindow:
         menubar.add_cascade(label="Fichier", menu=file_menu)
         file_menu.add_command(label="Nouveau Projet...", command=self._browse_pdf_file)
         file_menu.add_command(label="Quitter", command=self.root.quit)
+
+        # AJOUT DU MENU DEBUG
+        debug_menu = tk.Menu(menubar, tearoff=0)
+        menubar.add_cascade(label="Outils de débogage", menu=debug_menu)
+        debug_menu.add_command(label="Ouvrir le fichier de trace de session", command=self._open_debug_trace_file)
         
         help_menu = tk.Menu(menubar, tearoff=0)
         menubar.add_cascade(label="Aide", menu=help_menu)
@@ -384,7 +409,6 @@ class MainWindow:
             self.logger.error(f"Erreur init: {e}")
             messagebox.showerror("Erreur", f"Erreur lors de l'initialisation: {e}")
 
-    # ... (les autres fonctions de la classe restent les mêmes) ...
     def _load_recent_sessions(self):
         if not self.session_manager:
             return
@@ -434,6 +458,9 @@ class MainWindow:
             self.current_session_id = session_id
             self._update_session_info()
             
+            # CONFIGURATION DU LOGGER DE DEBUG
+            self._setup_debug_logger(session_id)
+            
             self.notebook.select(1)
             self._update_global_progress(1, "Session créée, démarrage de l'analyse...")
             
@@ -460,7 +487,6 @@ class MainWindow:
                 self.session_manager.save_analysis_data(analysis_data, self.current_session_id)
                 self.session_manager.update_session_status(SessionStatus.READY_FOR_TRANSLATION, self.current_session_id)
                 
-                # MODIFICATION : Appeler la nouvelle fonction post-analyse
                 self.root.after(0, self._post_analysis_step, analysis_data)
                 
             except Exception as e:
@@ -500,7 +526,6 @@ class MainWindow:
                 
                 extraction_data = self.text_extractor.extract_for_translation(analysis_data)
                 
-                # --- FIX: Sauvegarder les données d'extraction ---
                 session_dir = self.session_manager.get_session_directory(self.current_session_id)
                 with open(session_dir / "extraction_data.json", 'w', encoding='utf-8') as f:
                     json.dump(extraction_data, f, indent=2, ensure_ascii=False)
@@ -525,7 +550,6 @@ class MainWindow:
             try:
                 self._set_processing(True, "Validation...")
                 
-                # --- FIX: Charger les données d'extraction correctes ---
                 session_dir = self.session_manager.get_session_directory(self.current_session_id)
                 with open(session_dir / "extraction_data.json", 'r', encoding='utf-8') as f:
                     extraction_data = json.load(f)
@@ -556,7 +580,6 @@ class MainWindow:
                 
                 session_dir = self.session_manager.get_session_directory(self.current_session_id)
                 
-                # --- FIX: Utiliser analysis_data (complet) au lieu d'extraction_data (simplifié) ---
                 with open(session_dir / "analysis_data.json", 'r', encoding='utf-8') as f:
                     analysis_data = json.load(f)
                 
@@ -581,7 +604,6 @@ class MainWindow:
         
         threading.Thread(target=layout_thread, daemon=True).start()
 
-    # ... (le reste des fonctions de la classe restent les mêmes) ...
     def _show_export_success(self, export_dir: Path, files_created: Dict[str, Path]):
         message = f"Export généré avec succès dans :\n{export_dir}\n\nFichiers créés:\n"
         for file_type, file_path in files_created.items():
@@ -593,9 +615,7 @@ class MainWindow:
     
     def _open_export_folder(self):
         if hasattr(self, '_export_folder'):
-            import os
             import platform
-            
             if platform.system() == 'Windows':
                 os.startfile(self._export_folder)
             elif platform.system() == 'Darwin':
@@ -703,7 +723,6 @@ class MainWindow:
     
     def _open_output_folder(self):
         if hasattr(self, '_output_folder'):
-            import os
             os.startfile(self._output_folder)
     
     def _new_project(self):
@@ -777,26 +796,26 @@ class MainWindow:
         self.current_session_id = session_id
         self._update_session_info()
         messagebox.showinfo("Succès", "Session chargée ! Reprise du travail en cours...")
+        
+        # CONFIGURATION DU LOGGER DE DEBUG POUR LA SESSION REPRISE
+        self._setup_debug_logger(session_id)
 
-        # --- DÉBUT DE LA LOGIQUE DE REPRISE DE SESSION ---
         session_info = self.session_manager.get_session_info(session_id)
         session_dir = self.session_manager.get_session_directory(session_id)
         status = session_info.status
 
         try:
-            # Recharger les données de l'analyse, car elles sont nécessaires pour toutes les étapes suivantes
             analysis_data = self.session_manager.load_analysis_data(session_id)
             if analysis_data:
                 self._display_analysis_results(analysis_data)
             
-            # Aller directement au bon onglet en fonction du statut
             if status in [SessionStatus.READY_FOR_TRANSLATION, SessionStatus.TRANSLATING, SessionStatus.READY_FOR_REVIEW, SessionStatus.REVIEWING]:
-                self.notebook.select(2) # Aller à l'onglet Traduction
+                self.notebook.select(2)
                 self._update_global_progress(3, "Prêt pour la traduction")
 
             elif status in [SessionStatus.READY_FOR_LAYOUT, SessionStatus.PROCESSING_LAYOUT]:
                  self.continue_to_layout_button.config(state='normal')
-                 self.notebook.select(3) # Aller à l'onglet Mise en page
+                 self.notebook.select(3)
                  self._update_global_progress(4, "Prêt pour la mise en page")
             
             elif status in [SessionStatus.READY_FOR_EXPORT, SessionStatus.COMPLETED]:
@@ -804,17 +823,16 @@ class MainWindow:
                  if layout_result_path.exists():
                      with open(layout_result_path, 'r', encoding='utf-8') as f:
                          self._display_layout_results(json.load(f))
-                 self.notebook.select(4) # Aller à l'onglet Export
+                 self.notebook.select(4)
                  self._update_global_progress(5, "Prêt pour l'export")
-                 self._set_suggested_output_filename() # Suggérer le nom de fichier
+                 self._set_suggested_output_filename()
             
-            else: # Pour les statuts CREATED, ANALYZING, ou ERROR
-                self.notebook.select(1) # Aller à l'onglet Analyse par défaut
+            else:
+                self.notebook.select(1)
         except Exception as e:
             self.logger.error(f"Erreur lors de la reprise de session: {e}")
             messagebox.showerror("Erreur de Reprise", f"Impossible de restaurer l'état de la session: {e}")
             self.notebook.select(0)
-        # --- FIN DE LA LOGIQUE DE REPRISE DE SESSION ---
 
     def _delete_selected_session(self):
         selection = self.sessions_tree.selection()
@@ -832,3 +850,28 @@ class MainWindow:
     def _preview_layout(self):
         messagebox.showinfo("Info", "Pas encore implémenté")
 
+    def _open_debug_trace_file(self):
+        """Ouvre le fichier de trace de la session courante."""
+        if not self.current_session_id:
+            messagebox.showwarning("Aucune session", "Veuillez démarrer ou ouvrir une session pour voir sa trace de débogage.")
+            return
+        
+        session_dir = self.session_manager.get_session_directory(self.current_session_id)
+        if not session_dir:
+            return
+
+        trace_file = session_dir / "debug_session_trace.log"
+        if trace_file.exists():
+            try:
+                # Méthode multi-plateforme pour ouvrir un fichier avec l'application par défaut
+                import platform
+                if platform.system() == 'Windows':
+                    os.startfile(trace_file)
+                elif platform.system() == 'Darwin': # macOS
+                    os.system(f'open "{trace_file}"')
+                else: # linux
+                    os.system(f'xdg-open "{trace_file}"')
+            except Exception as e:
+                messagebox.showerror("Erreur", f"Impossible d'ouvrir le fichier de trace:\n{e}")
+        else:
+            messagebox.showinfo("Information", "Le fichier de trace n'a pas encore été créé pour cette session. Lancez une analyse.")
