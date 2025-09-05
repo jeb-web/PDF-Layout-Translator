@@ -3,9 +3,6 @@
 """
 PDF Layout Translator - Moteur de Mise en Page
 Calcule le "reflow" du texte et ajuste les boîtes de délimitation.
-
-Auteur: L'OréalGPT
-Version: 2.0.6 (Logique de calcul simplifiée)
 """
 import logging
 from typing import List
@@ -47,10 +44,6 @@ class LayoutProcessor:
         return (total_width / font['head'].unitsPerEm) * font_size
 
     def process_pages(self, pages: List[PageObject]) -> List[PageObject]:
-        """
-        Calcule le reflow pour chaque bloc de texte.
-        Ne reçoit que la "Version à Rendre" avec du texte garanti.
-        """
         self.debug_logger.info("LayoutProcessor: Démarrage du calcul du reflow.")
         for page in pages:
             for block in page.text_blocks:
@@ -63,10 +56,9 @@ class LayoutProcessor:
                 line_height = block.spans[0].font.size * 1.2
                 current_y = line_height
                 
-                self.debug_logger.info(f"  - Calcul du bloc {block.id} (largeur disponible: {original_width:.2f}pt)")
+                self.debug_logger.info(f"  - Calcul du bloc {block.id} (largeur: {original_width:.2f}pt)")
                 
                 for span in block.spans:
-                    # Le texte est déjà finalisé (traduit ou original)
                     words = span.text.split(' ')
                     for i, word in enumerate(words):
                         word_with_space = word + (' ' if i < len(words) - 1 else '')
@@ -80,7 +72,7 @@ class LayoutProcessor:
                 
                 new_height = current_y
                 block.final_bbox = (block.bbox[0], block.bbox[1], block.bbox[2], block.bbox[1] + new_height)
-                self.debug_logger.info(f"    -> Nouvelle hauteur calculée: {new_height:.2f}pt. Bbox finale: {block.final_bbox}")
+                self.debug_logger.info(f"    -> Nouvelle hauteur: {new_height:.2f}pt. Bbox finale: {block.final_bbox}")
         
         self.debug_logger.info("LayoutProcessor: Calcul du reflow terminé.")
         return pages
