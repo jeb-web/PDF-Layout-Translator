@@ -5,7 +5,7 @@ PDF Layout Translator - Gestionnaire de polices
 Gestion des polices, détection, remplacement et installation
 
 Auteur: L'OréalGPT
-Version: 1.0.0
+Version: 1.0.1 (Correction de la recherche de police)
 """
 
 import os
@@ -41,13 +41,15 @@ class FontManager:
         self.font_mappings_file = self.app_data_dir / "config" / "font_mappings.json"
         
         self.font_families: Dict[str, FontFamily] = {}
+        # NOUVEAU : Dictionnaire de recherche directe pour la performance et la fiabilité
+        self.full_name_to_path: Dict[str, Path] = {}
         self.font_mappings: Dict[str, FontMapping] = {}
         self._scanned_files = set()
         
         self._scan_system_fonts()
         self._load_font_mappings()
         
-        self.logger.info(f"FontManager initialisé: {len(self.font_families)} familles de polices trouvées.")
+        self.logger.info(f"FontManager initialisé: {len(self.font_families)} familles, {len(self.full_name_to_path)} styles de polices trouvés.")
 
     def _scan_system_fonts(self):
         if platform.system() == "Windows":
@@ -111,13 +113,14 @@ class FontManager:
             if family_name not in self.font_families:
                 self.font_families[family_name] = FontFamily(name=family_name)
             self.font_families[family_name].styles[style_name] = FontStyle(path=font_path)
+            
+            # NOUVEAU : Remplir le dictionnaire de recherche directe
+            full_name = f"{family_name} {style_name}"
+            self.full_name_to_path[full_name] = font_path
 
     def get_all_available_fonts(self) -> List[str]:
-        full_font_names = []
-        for family in self.font_families.values():
-            for style in family.styles.keys():
-                full_font_names.append(f"{family.name} {style}")
-        return sorted(full_font_names)
+        # MODIFIÉ : Utiliser les clés du dictionnaire direct pour garantir la cohérence
+        return sorted(list(self.full_name_to_path.keys()))
 
     def check_fonts_availability(self, required_fonts: List[str]) -> Dict[str, Any]:
         available_fonts_list = self.get_all_available_fonts()
@@ -130,68 +133,77 @@ class FontManager:
         return {'missing_fonts': list(missing_fonts), 'suggestions': suggestions, 'all_available': not missing_fonts}
 
     def _suggest_alternatives(self, missing_font: str) -> List[Dict[str, Any]]:
+        # La logique de suggestion peut être améliorée, mais pour l'instant, c'est suffisant
         return [{'font_name': "Arial Regular"}]
         
     def create_font_mapping(self, original_font: str, replacement_font_name: str):
         self.font_mappings[original_font] = FontMapping(original_font, replacement_font_name)
         self._save_font_mappings()
 
+    # --- MÉTHODE ENTIÈREMENT RÉÉCRITE POUR ÊTRE PLUS FIABLE ---
     def get_replacement_font_path(self, original_font_name: str) -> Optional[Path]:
         """
         Trouve le chemin vers le fichier de police de remplacement avec une logique de fallback.
         """
-        # Priorité 1: Le choix de l'utilisateur
-        if original_font_name in self.font_mappings:
-            replacement_name = self.font_mappings[original_font_name].replacement_font_name
-            path = self._find_path_for_full_name(replacement_name)
+        # Priorité 1: Le choix exact de l'utilisateur
+        mapping = self.font_mappings.get(original_font_name)
+        if mapping:
+            replacement_name = mapping.replacement_font_name
+            # Utiliser notre dictionnaire de recherche directe
+            path = self.full_name_to_path.get(replacement_name)
             if path:
-                self.logger.debug(f"Mapping utilisateur trouvé pour '{original_font_name}' -> '{replacement_name}'")
+                self.logger.info(f"Mapping utilisateur appliqué : '{original_font_name}' -> '{replacement_name}'")
                 return path
+            else:
+                self.logger.warning(f"Le mapping pour '{original_font_name}' pointe vers une police inconnue : '{replacement_name}'")
 
-        # Priorité 2: Suggestion intelligente (recherche de style dans une famille commune)
+        # Priorité 2: Suggestion intelligente (fallback si aucun mapping n'est défini ou valide)
         style_hints = self._get_style_hints(original_font_name)
-        common_families = ["Arial", "Times New Roman", "Calibri", "Verdana"]
+        common_families = ["Arial", "Calibri", "Times New Roman", "Verdana"]
         for family in common_families:
             path = self._find_best_style_in_family(family, style_hints)
             if path:
-                self.logger.debug(f"Suggestion intelligente pour '{original_font_name}' -> '{path.name}'")
+                self.logger.info(f"Fallback intelligent pour '{original_font_name}' -> police de la famille '{family}'")
                 return path
         
-        self.logger.warning(f"Aucune police de remplacement trouvée pour '{original_font_name}'.")
-        return None
-
-    def _find_path_for_full_name(self, full_name: str) -> Optional[Path]:
-        """Trouve le chemin d'un fichier à partir de son nom complet (Famille + Style)."""
-        family, style = self._split_font_name(full_name)
-        if family in self.font_families and style in self.font_families[family].styles:
-            return self.font_families[family].styles[style].path
+        # Ultime recours : la première police disponible
+        if self.full_name_to_path:
+            fallback_path = next(iter(self.full_name_to_path.values()))
+            self.logger.warning(f"Aucune police de remplacement trouvée pour '{original_font_name}'. Utilisation de l'ultime recours : {fallback_path.name}")
+            return fallback_path
+            
+        self.logger.error(f"Aucune police de remplacement trouvée pour '{original_font_name}' et aucune police système n'est disponible.")
         return None
 
     def _find_best_style_in_family(self, family_name: str, style_hints: List[str]) -> Optional[Path]:
         """Cherche le meilleur style correspondant dans une famille donnée."""
         if family_name in self.font_families:
             family_styles = self.font_families[family_name].styles
-            # Essayer de trouver une correspondance exacte des styles
+            
+            # Tenter de trouver une correspondance
             for style_name, style_obj in family_styles.items():
-                if all(hint in style_name.lower() for hint in style_hints):
+                style_lower = style_name.lower()
+                if all(hint in style_lower for hint in style_hints):
                     return style_obj.path
-            # Si non trouvé, se rabattre sur "Regular"
+                    
+            # Si aucun style ne correspond, prendre "Regular" ou le premier disponible
             if "Regular" in family_styles:
                 return family_styles["Regular"].path
+            elif family_styles:
+                return next(iter(family_styles.values())).path
         return None
 
     def _get_style_hints(self, font_name: str) -> List[str]:
-        hints = []; name_lower = font_name.lower()
+        """Extrait des indices de style (bold, italic) du nom de la police."""
+        hints = []
+        name_lower = font_name.lower()
         if 'bold' in name_lower: hints.append('bold')
-        if 'italic' in name_lower: hints.append('italic')
+        if 'italic' in name_lower or 'oblique' in name_lower: hints.append('italic')
+        if not hints:
+            hints.append('regular') # Indice par défaut
         return hints
 
-    def _split_font_name(self, full_name: str) -> Tuple[str, str]:
-        for family_name in sorted(self.font_families.keys(), key=len, reverse=True):
-            if full_name.lower().startswith(family_name.lower()):
-                style = full_name[len(family_name):].strip()
-                return family_name, style if style else "Regular"
-        return full_name, "Regular"
+    # --- Les fonctions suivantes sont inchangées ---
 
     def _load_font_mappings(self):
         if self.font_mappings_file.exists():
@@ -203,11 +215,17 @@ class FontManager:
                             original_font=mapping_data['original_font'],
                             replacement_font_name=mapping_data['replacement_font_name']
                         )
-            except Exception: pass
+            except Exception as e:
+                self.logger.warning(f"Impossible de charger les mappings de police: {e}")
 
     def _save_font_mappings(self):
         self.font_mappings_file.parent.mkdir(parents=True, exist_ok=True)
         try:
             with open(self.font_mappings_file, 'w', encoding='utf-8') as f:
-                json.dump({k: v.__dict__ for k, v in self.font_mappings.items()}, f, indent=2)
-        except Exception: pass
+                # S'assurer que les données sont sérialisables en JSON
+                serializable_data = {
+                    key: value.__dict__ for key, value in self.font_mappings.items()
+                }
+                json.dump(serializable_data, f, indent=2)
+        except Exception as e:
+            self.logger.error(f"Impossible de sauvegarder les mappings de police: {e}")
