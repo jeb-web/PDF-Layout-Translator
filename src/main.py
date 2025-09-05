@@ -8,8 +8,8 @@ Auteur: L'OréalGPT
 Version: 1.0.0
 """
 
-import sys
-import os
+# import sys
+# import os
 import traceback
 import logging
 from pathlib import Path
@@ -17,7 +17,7 @@ import tkinter as tk
 from tkinter import messagebox
 
 # Ajouter le répertoire src au path pour les imports
-sys.path.insert(0, os.path.dirname(os.path.abspath(__file__)))
+# sys.path.insert(0, os.path.dirname(os.path.abspath(__file__)))
 
 # Configuration du logging
 def setup_logging():
@@ -172,3 +172,4 @@ if __name__ == "__main__":
         sys.exit(1)
     
     main()
+
