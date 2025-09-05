@@ -2,7 +2,7 @@
 # -*- a: utf-8 -*-
 """
 PDF Layout Translator - Moteur de Rendu PDF
-*** VERSION DÉFINITIVE - SÉPARATION MESURE/DESSIN ***
+*** VERSION DÉFINITIVE - LOGIQUE DE CHARGEMENT DE POLICE UNIFIÉE ***
 """
 import logging
 from pathlib import Path
@@ -16,9 +16,7 @@ class PDFReconstructor:
         self.logger = logging.getLogger(__name__)
         self.debug_logger = logging.getLogger('debug_trace')
         self.font_manager = font_manager
-        # Cache 1: Pour les OBJETS Font, utilisés uniquement pour la MESURE.
         self.font_object_cache: Dict[Path, fitz.Font] = {}
-        # Cache 2: Pour les RÉFÉRENCES de police, utilisées uniquement pour le DESSIN.
         self.font_ref_cache: Dict[Path, str] = {}
 
     def _hex_to_rgb(self, hex_color: str) -> Tuple[float, float, float]:
@@ -57,27 +55,30 @@ class PDFReconstructor:
                     if not (font_path and font_path.exists()): continue
                     
                     try:
-                        # --- ÉTAPE 1: PRÉPARATION DE LA MESURE ---
+                        # --- ÉTAPE 1: PRÉPARATION DE LA MESURE (MÉTHODE UNIFIÉE) ---
                         if font_path not in self.font_object_cache:
-                            self.font_object_cache[font_path] = fitz.Font(fontfile=str(font_path))
+                            self.debug_logger.info(f"    - [SPAN {span.id}] Chargement de l'objet Font depuis '{font_path.name}'...")
+                            font_buffer = font_path.read_bytes()
+                            self.font_object_cache[font_path] = fitz.Font(fontbuffer=font_buffer)
+                            self.debug_logger.info(f"      -> Objet Font créé et mis en cache.")
                         font_object = self.font_object_cache[font_path]
 
                         # --- ÉTAPE 2: PRÉPARATION DU DESSIN ---
                         if font_path not in self.font_ref_cache:
+                            self.debug_logger.info(f"    - [SPAN {span.id}] Insertion de la police '{font_path.name}' dans le PDF...")
                             font_ref = page.insert_font(fontfile=str(font_path), fontname=font_path.stem)
                             self.font_ref_cache[font_path] = str(font_ref)
+                            self.debug_logger.info(f"      -> Police insérée. Réf. Dessin : '{self.font_ref_cache[font_path]}'")
                         font_ref_name = self.font_ref_cache[font_path]
-                        self.debug_logger.info(f"    - [SPAN {span.id}] Police '{span.font.name}' -> Remplacement '{font_path.name}' -> Réf. Dessin '{font_ref_name}'")
 
                     except Exception as e:
-                        self.logger.error(f"Erreur critique de préparation de la police {font_path.name} pour le span {span.id}: {e}")
+                        self.logger.error(f"Erreur critique de préparation de la police {font_path.name} pour le span {span.id}: {e}", exc_info=True)
                         continue
 
                     words = span.text.strip().split(' ')
                     for i, word in enumerate(words):
                         word_to_draw = word + (' ' if i < len(words) - 1 else '')
                         
-                        # --- MESURE FIABLE ---
                         word_width = font_object.text_length(word_to_draw, fontsize=span.font.size)
                         
                         if current_pos.x + word_width > block_bbox.x1 and current_pos.x > block_bbox.x0:
@@ -87,7 +88,6 @@ class PDFReconstructor:
                         if span.font.size > max_font_size_in_line: max_font_size_in_line = span.font.size
                         if current_pos.y > block_bbox.y1 + 5: break
 
-                        # --- DESSIN FIABLE ---
                         shape.insert_text(
                             current_pos, word_to_draw,
                             fontname=font_ref_name, fontsize=span.font.size,
