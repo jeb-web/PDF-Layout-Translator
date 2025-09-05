@@ -2,7 +2,7 @@
 # -*- a: utf-8 -*-
 """
 PDF Layout Translator - Moteur de Rendu PDF
-*** VERSION FINALE - CORRECTION DU TYPAGE DE LA RÉFÉRENCE DE POLICE ***
+*** VERSION DÉFINITIVE - SÉPARATION MESURE/DESSIN ***
 """
 import logging
 from pathlib import Path
@@ -16,6 +16,9 @@ class PDFReconstructor:
         self.logger = logging.getLogger(__name__)
         self.debug_logger = logging.getLogger('debug_trace')
         self.font_manager = font_manager
+        # Cache 1: Pour les OBJETS Font, utilisés uniquement pour la MESURE.
+        self.font_object_cache: Dict[Path, fitz.Font] = {}
+        # Cache 2: Pour les RÉFÉRENCES de police, utilisées uniquement pour le DESSIN.
         self.font_ref_cache: Dict[Path, str] = {}
 
     def _hex_to_rgb(self, hex_color: str) -> Tuple[float, float, float]:
@@ -23,26 +26,21 @@ class PDFReconstructor:
         if len(hex_color) == 3: hex_color = "".join([c*2 for c in hex_color])
         if len(hex_color) != 6: return (0, 0, 0)
         try:
-            r = int(hex_color[0:2], 16) / 255.0
-            g = int(hex_color[2:4], 16) / 255.0
-            b = int(hex_color[4:6], 16) / 255.0
+            r = int(hex_color[0:2], 16) / 255.0; g = int(hex_color[2:4], 16) / 255.0; b = int(hex_color[4:6], 16) / 255.0
             return (r, g, b)
-        except ValueError:
-            return (0, 0, 0)
+        except ValueError: return (0, 0, 0)
             
     def render_pages(self, pages: List[PageObject], output_path: Path):
-        self.debug_logger.info("="*50)
-        self.debug_logger.info(" NOUVEAU RENDU PDF (AVEC TRACE DÉTAILLÉE) ")
-        self.debug_logger.info("="*50)
+        self.debug_logger.info("="*50); self.debug_logger.info(" NOUVEAU RENDU PDF (VERSION DÉFINITIVE) "); self.debug_logger.info("="*50)
         doc = fitz.open()
+        self.font_object_cache.clear()
         self.font_ref_cache.clear()
 
         for page_data in pages:
-            self.debug_logger.info(f"\n--- [PAGE {page_data.page_number}] Début du rendu ---")
+            self.debug_logger.info(f"\n--- [PAGE {page_data.page_number}] ---")
             page = doc.new_page(width=page_data.dimensions[0], height=page_data.dimensions[1])
             
             for block in page_data.text_blocks:
-                self.debug_logger.info(f"  - [BLOC {block.id}] Traitement...")
                 if not block.final_bbox or not block.spans: continue
                 
                 shape = page.new_shape()
@@ -55,49 +53,44 @@ class PDFReconstructor:
                 for span in block.spans:
                     if not span.text or not span.text.strip(): continue
                     
-                    self.debug_logger.info(f"    - [SPAN {span.id}] Demande de police pour '{span.font.name}'...")
                     font_path = self.font_manager.get_replacement_font_path(span.font.name)
+                    if not (font_path and font_path.exists()): continue
                     
-                    if not (font_path and font_path.exists()):
-                        self.debug_logger.warning(f"      -> ÉCHEC : Police non trouvée pour '{span.font.name}'. Span ignoré.")
-                        continue
-                    
-                    self.debug_logger.info(f"      -> SUCCÈS : Chemin de police obtenu : '{font_path.name}'")
-
                     try:
+                        # --- ÉTAPE 1: PRÉPARATION DE LA MESURE ---
+                        if font_path not in self.font_object_cache:
+                            self.font_object_cache[font_path] = fitz.Font(fontfile=str(font_path))
+                        font_object = self.font_object_cache[font_path]
+
+                        # --- ÉTAPE 2: PRÉPARATION DU DESSIN ---
                         if font_path not in self.font_ref_cache:
-                            self.debug_logger.info(f"        -> [CACHE] Police non trouvée dans le cache. Insertion dans le PDF...")
                             font_ref = page.insert_font(fontfile=str(font_path), fontname=font_path.stem)
-                            # --- BLINDAGE CONTRE LE RETOUR D'UN ENTIER ---
-                            self.font_ref_cache[font_path] = str(font_ref) # Conversion systématique en string
-                            self.debug_logger.info(f"          -> Police insérée. Référence obtenue : '{font_ref}' (type: {type(font_ref).__name__})")
-                        
+                            self.font_ref_cache[font_path] = str(font_ref)
                         font_ref_name = self.font_ref_cache[font_path]
-                        self.debug_logger.info(f"        -> [CACHE] Utilisation de la référence de police : '{font_ref_name}'")
+                        self.debug_logger.info(f"    - [SPAN {span.id}] Police '{span.font.name}' -> Remplacement '{font_path.name}' -> Réf. Dessin '{font_ref_name}'")
+
                     except Exception as e:
-                        self.logger.error(f"      -> ERREUR CRITIQUE : Impossible d'insérer la police {font_path} dans le PDF: {e}")
+                        self.logger.error(f"Erreur critique de préparation de la police {font_path.name} pour le span {span.id}: {e}")
                         continue
 
                     words = span.text.strip().split(' ')
                     for i, word in enumerate(words):
                         word_to_draw = word + (' ' if i < len(words) - 1 else '')
                         
-                        word_width = fitz.get_text_length(word_to_draw, fontname=font_ref_name, fontsize=span.font.size)
+                        # --- MESURE FIABLE ---
+                        word_width = font_object.text_length(word_to_draw, fontsize=span.font.size)
                         
                         if current_pos.x + word_width > block_bbox.x1 and current_pos.x > block_bbox.x0:
-                            current_pos.x = block_bbox.x0
-                            current_pos.y += max_font_size_in_line * 1.2
+                            current_pos.x = block_bbox.x0; current_pos.y += max_font_size_in_line * 1.2
                             max_font_size_in_line = span.font.size
                         
                         if span.font.size > max_font_size_in_line: max_font_size_in_line = span.font.size
                         if current_pos.y > block_bbox.y1 + 5: break
 
-                        self.debug_logger.info(f"          -> [DESSIN] Mot: '{word_to_draw}', Police: '{font_ref_name}', Taille: {span.font.size}")
+                        # --- DESSIN FIABLE ---
                         shape.insert_text(
-                            current_pos,
-                            word_to_draw,
-                            fontname=font_ref_name,
-                            fontsize=span.font.size,
+                            current_pos, word_to_draw,
+                            fontname=font_ref_name, fontsize=span.font.size,
                             color=self._hex_to_rgb(span.font.color)
                         )
                         current_pos.x += word_width
@@ -106,7 +99,6 @@ class PDFReconstructor:
                 
                 shape.commit()
 
-        self.debug_logger.info("\n--- Fin du rendu ---")
         doc.save(output_path, garbage=4, deflate=True)
         doc.close()
-        self.debug_logger.info(f"PDF final sauvegardé dans : {output_path}")
+        self.debug_logger.info(f"\nPDF final sauvegardé dans : {output_path}")
