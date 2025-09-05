@@ -35,17 +35,9 @@ jobs:
     
     - name: Build single EXE with PyInstaller
       run: |
-        echo "🔨 Building the executable with explicit hidden imports..."
-        pyinstaller --noconfirm --onefile --windowed `
-          --name "${{ env.APP_NAME }}" `
-          # --- CORRECTION : FORCER L'INCLUSION DES MODULES CRITIQUES ---
-          --hidden-import=reportlab `
-          --hidden-import=fitz `
-          --hidden-import=lxml `
-          --hidden-import=fontTools `
-          --hidden-import=googletrans `
-          # --- FIN DE LA CORRECTION ---
-          src/main.py
+        echo "🔨 Building the executable with explicit hidden imports on a single line..."
+        # --- CORRECTION FINALE : TOUTE LA COMMANDE SUR UNE SEULE LIGNE POUR ÉVITER LES ERREURS POWERSHELL ---
+        pyinstaller --noconfirm --onefile --windowed --name "${{ env.APP_NAME }}" --hidden-import=reportlab --hidden-import=fitz --hidden-import=lxml --hidden-import=fontTools --hidden-import=googletrans src/main.py
 
     - name: Verify EXE creation
       run: |
