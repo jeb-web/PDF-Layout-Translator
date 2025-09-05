@@ -4,13 +4,11 @@
 PDF Layout Translator - Dialogue de Gestion des Polices
 Interface pour gérer les polices manquantes et leurs remplacements.
 """
-
 import tkinter as tk
 from tkinter import ttk, messagebox
 import logging
 
 class AutocompleteCombobox(ttk.Combobox):
-    # ... (le code de cette classe reste inchangé) ...
     def set_completion_list(self, completion_list):
         self._completion_list = sorted(completion_list)
         self._hits = []
@@ -20,10 +18,8 @@ class AutocompleteCombobox(ttk.Combobox):
         self['values'] = self._completion_list
 
     def autocomplete(self, delta=0):
-        if delta:
-            self.delete(self.position, tk.END)
-        else:
-            self.position = len(self.get())
+        if delta: self.delete(self.position, tk.END)
+        else: self.position = len(self.get())
         
         _hits = [item for item in self._completion_list if item.lower().startswith(self.get().lower())]
         
@@ -39,9 +35,9 @@ class AutocompleteCombobox(ttk.Combobox):
             self.icursor(len(current_text))
             
     def handle_keyrelease(self, event):
-        if event.keysym in ("BackSpace", "Left", "Right", "Up", "Down", "Return", "KP_Enter"):
-            return
+        if event.keysym in ("BackSpace", "Left", "Right", "Up", "Down", "Return", "KP_Enter"): return
         self.autocomplete()
+
 
 class FontDialog:
     def __init__(self, parent, font_manager, missing_fonts_report):
@@ -64,7 +60,6 @@ class FontDialog:
         self.window.protocol("WM_DELETE_WINDOW", self._on_cancel)
     
     def _create_widgets(self):
-        # ... (cette fonction reste inchangée) ...
         main_frame = ttk.Frame(self.window, padding="10")
         main_frame.pack(fill="both", expand=True)
         instructions = "Certaines polices sont manquantes. Choisissez un remplacement pour chacune."
@@ -87,21 +82,18 @@ class FontDialog:
 
     def _populate_fonts(self):
         for font_name in self.report['missing_fonts']:
-            # --- MODIFICATION ---
-            # Priorité 1: Mapping déjà sauvegardé
-            # Priorité 2: Suggestion de l'analyseur
-            # Priorité 3: Arial par défaut
-            saved_mapping = self.font_manager.get_font_mapping(font_name)
-            if saved_mapping:
-                suggestion = saved_mapping
-            else:
-                suggestion = self.report['suggestions'].get(font_name, [{}])[0].get('font_name', "Arial")
-            # --- FIN MODIFICATION ---
+            # --- CORRECTION DE LA LOGIQUE DE PRÉREMPLISSAGE ---
+            # 1. Chercher un mapping déjà sauvegardé.
+            # 2. Sinon, utiliser la suggestion.
+            # 3. Sinon, utiliser "Arial".
+            suggestion = self.font_manager.get_font_mapping(font_name) \
+                         or self.report['suggestions'].get(font_name, [{}])[0].get('font_name', "Arial")
+            
             self.user_choices[font_name] = tk.StringVar(value=suggestion)
             self.tree.insert("", "end", values=(font_name, suggestion))
+            # --- FIN DE LA CORRECTION ---
 
     def _on_edit_cell(self, event):
-        # ... (cette fonction reste inchangée) ...
         item_id = self.tree.identify_row(event.y)
         column = self.tree.identify_column(event.x)
         if not item_id or column != "#2": return
@@ -126,9 +118,7 @@ class FontDialog:
         combo.bind("<Return>", on_combo_close)
         combo.bind("<KP_Enter>", on_combo_close)
 
-
     def _on_validate(self):
-        # ... (cette fonction reste inchangée) ...
         try:
             for item_id in self.tree.get_children():
                 font_name, replacement = self.tree.item(item_id, "values")
@@ -140,7 +130,6 @@ class FontDialog:
             messagebox.showerror("Erreur", f"Une erreur est survenue: {e}", parent=self.window)
 
     def _on_cancel(self):
-        # ... (cette fonction reste inchangée) ...
         if messagebox.askyesno("Confirmation", "Annuler ? Les polices manquantes seront remplacées par défaut.", parent=self.window):
             self.window.destroy()
 
