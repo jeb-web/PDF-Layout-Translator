@@ -36,7 +36,7 @@ class AutoTranslator:
     def translate_xliff_content(self, xliff_content: str, target_lang: str) -> str:
         """
         Traduit le contenu d'un fichier XLIFF en utilisant Google Translate.
-        En cas d'erreur de traduction, le texte source est conservé.
+        En cas d'erreur de traduction pour un segment, le texte source est conservé.
         """
         if not self.is_available():
             raise RuntimeError("La bibliothèque 'googletrans' n'est pas installée.")
