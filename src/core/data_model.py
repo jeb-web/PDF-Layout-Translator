@@ -22,6 +22,8 @@ class TextSpan:
     font: FontInfo
     bbox: Tuple[float, float, float, float]
     translated_text: str = ""
+    # [JALON 2] Ajout d'un drapeau pour marquer un saut de ligne forcé après ce span.
+    forces_line_break: bool = False
 
 @dataclass
 class Paragraph:
@@ -35,7 +37,6 @@ class TextBlock:
     paragraphs: List[Paragraph] = field(default_factory=list)
     alignment: int = 0
     final_bbox: Tuple[float, float, float, float] = None
-    # La liste plate est remplie après la reconstruction pour les modules de rendu
     spans: List[TextSpan] = field(default_factory=list, repr=False)
 
 @dataclass
