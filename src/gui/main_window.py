@@ -17,6 +17,7 @@ from typing import List, Dict
 import json
 import os
 from dataclasses import asdict
+from lxml import etree
 
 from core.session_manager import SessionManager
 from core.pdf_analyzer import PDFAnalyzer
@@ -359,34 +360,82 @@ class MainWindow:
         threading.Thread(target=thread_target, daemon=True).start()
 
     def _prepare_render_version(self, pages: List[PageObject], translations: Dict[str, str]) -> List[PageObject]:
-        self.debug_logger.info("'Version à Rendre' créée (Jalon 2) : la traduction par paragraphe a été appliquée.")
         import copy
+        from lxml import etree # Nécessaire pour parser le HTML
+
+        self.debug_logger.info("'Version à Rendre' (Jalon 2) : Reconstruction depuis HTML...")
         render_pages = copy.deepcopy(pages)
+        
+        # Recréer la table de styles utilisée lors de l'extraction
+        # C'est un hack temporaire. Idéalement, la feuille de style serait passée avec les données.
+        styles = {}
+        style_counter = 1
+        def get_style_class(font_info: FontInfo):
+            nonlocal styles, style_counter
+            style_key = (font_info.name, font_info.size, font_info.color, font_info.is_bold, font_info.is_italic)
+            for class_name, style in styles.items():
+                if style == style_key:
+                    return class_name
+            class_name = f"c{style_counter}"
+            styles[class_name] = style_key
+            style_counter += 1
+            return class_name
+        
+        # Pré-peupler les styles
+        for p in pages:
+            for b in p.text_blocks:
+                for para in b.paragraphs:
+                    for s in para.spans:
+                        get_style_class(s.font)
+        
+        # Inverser le dictionnaire pour un accès facile
+        class_to_style = {v: k for k, v in styles.items()}
         
         for page in render_pages:
             for block in page.text_blocks:
-                # [JALON 2] Logique d'application des traductions par paragraphe
+                new_paragraphs = []
                 for paragraph in block.paragraphs:
-                    translated_text = translations.get(paragraph.id)
+                    translated_html = translations.get(paragraph.id)
                     
-                    if translated_text is not None and paragraph.spans:
-                        # Solution temporaire pour ce jalon :
-                        # On met tout le texte traduit dans le premier span...
-                        paragraph.spans[0].text = translated_text
-                        # ...et on supprime les autres pour éviter les duplications.
-                        # Cela va casser le multi-style, ce qui est le résultat attendu pour ce test.
-                        original_first_span = paragraph.spans[0]
-                        paragraph.spans.clear()
-                        paragraph.spans.append(original_first_span)
-                    elif not paragraph.spans:
-                        # Paragraphe vide, on ne fait rien
-                        pass
-                    else:
-                        # Si pas de traduction, on garde le texte original
-                        # Pour cela, on ne fait rien, les spans originaux sont conservés
-                        pass
-                
-                # Mettre à jour la liste plate de spans pour les modules suivants
+                    if translated_html is None:
+                        new_paragraphs.append(paragraph)
+                        continue
+
+                    # Parser le HTML
+                    try:
+                        # Retirer le CDATA pour le parsing
+                        if translated_html.startswith('<![CDATA['):
+                            translated_html = translated_html[9:-3]
+                        
+                        root = etree.fromstring(translated_html)
+                        new_spans = []
+                        span_counter = 0
+
+                        for node in root.iterchildren():
+                            if node.tag == 'span':
+                                class_name = node.get('class')
+                                style_key = styles.get(class_name)
+                                if style_key:
+                                    font_info = FontInfo(name=style_key[0], size=style_key[1], color=style_key[2], is_bold=style_key[3], is_italic=style_key[4])
+                                    text = node.text or ""
+                                    
+                                    span_id = f"{paragraph.id}_S{span_counter+1}"
+                                    new_spans.append(TextSpan(id=span_id, text=text, font=font_info, bbox=(0,0,0,0)))
+                                    span_counter += 1
+
+                                    # Vérifier si un <br/> suit ce span
+                                    if node.tail and '<br/>' in node.tail:
+                                        new_spans[-1].forces_line_break = True
+                        
+                        new_para = Paragraph(id=paragraph.id, spans=new_spans)
+                        new_paragraphs.append(new_para)
+
+                    except Exception as e:
+                        self.debug_logger.error(f"Erreur de parsing HTML pour le paragraphe {paragraph.id}: {e}")
+                        # En cas d'échec, on garde le paragraphe original pour ne pas avoir de trou.
+                        new_paragraphs.append(paragraph)
+
+                block.paragraphs = new_paragraphs
                 block.spans = [span for para in block.paragraphs for span in para.spans]
 
         return render_pages
@@ -479,3 +528,4 @@ class ToolTip:
     def hide_tooltip(self, event):
         if self.tooltip_window: self.tooltip_window.destroy()
         self.tooltip_window = None
+
