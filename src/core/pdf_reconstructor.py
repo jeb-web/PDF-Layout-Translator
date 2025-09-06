@@ -2,7 +2,7 @@
 # -*- coding: utf-8 -*-
 """
 PDF Layout Translator - Moteur de Rendu PDF
-*** VERSION FINALE - Jalon 3.0 (Logique Hybride) ***
+*** VERSION DE DÉBOGAGE - JALON 2.1 (Méthode Directe) ***
 """
 import logging
 from pathlib import Path
@@ -16,23 +16,6 @@ class PDFReconstructor:
         self.logger = logging.getLogger(__name__)
         self.debug_logger = logging.getLogger('debug_trace')
         self.font_manager = font_manager
-        self.font_cache: Dict[str, fitz.Font] = {}
-
-    def _get_font(self, font_name: str) -> fitz.Font:
-        if font_name in self.font_cache:
-            return self.font_cache[font_name]
-        
-        font_path = self.font_manager.get_replacement_font_path(font_name)
-        if font_path and font_path.exists():
-            try:
-                font_buffer = font_path.read_bytes()
-                font = fitz.Font(fontbuffer=font_buffer)
-                self.font_cache[font_name] = font
-                return font
-            except Exception as e:
-                self.debug_logger.error(f"Erreur de chargement de la police {font_path}: {e}")
-        
-        return fitz.Font()
 
     def _hex_to_rgb(self, hex_color: str) -> Tuple[float, float, float]:
         hex_color = hex_color.lstrip('#')
@@ -45,113 +28,74 @@ class PDFReconstructor:
             return (r, g, b)
         except ValueError: return (0, 0, 0)
 
-    def _get_text_width(self, text: str, font_name: str, font_size: float) -> float:
-        font = self._get_font(font_name)
-        return font.text_length(text, fontsize=font_size)
-
     def render_pages(self, pages: List[PageObject], output_path: Path):
-        self.debug_logger.info("--- DÉMARRAGE PDFRECONSTRUCTOR (Jalon 3.0 - Hybride) ---")
+        self.debug_logger.info("--- DÉMARRAGE PDFRECONSTRUCTOR (Jalon 2.1) ---")
         doc = fitz.open()
-        self.font_cache.clear()
 
         for page_data in pages:
             self.debug_logger.info(f"Traitement de la Page {page_data.page_number}")
             page = doc.new_page(width=page_data.dimensions[0], height=page_data.dimensions[1])
 
+            # Enregistrer les polices nécessaires
             fonts_on_page = {span.font.name for block in page_data.text_blocks for span in block.spans}
             for font_name in fonts_on_page:
-                self._get_font(font_name)
                 font_path = self.font_manager.get_replacement_font_path(font_name)
                 if font_path and font_path.exists():
                     try:
                         page.insert_font(fontname=font_name, fontfile=str(font_path))
                     except Exception as e:
                         self.debug_logger.error(f"  -> ERREUR enregistrement police '{font_name}': {e}")
-            
-            sorted_blocks = sorted(page_data.text_blocks, key=lambda b: (b.bbox[1], b.bbox[0]))
-            
-            page_y_cursor = 0.0
-            if sorted_blocks:
-                page_y_cursor = sorted_blocks[0].bbox[1]
 
-            for block in sorted_blocks:
-                if not block.final_bbox or not block.paragraphs:
-                    continue
-
-                # Logique du curseur plancher hybride
-                block_start_y = block.bbox[1]
-                if block.is_vertically_extended:
-                    block_start_y = max(block.bbox[1], page_y_cursor)
-
-                if block_start_y > page.rect.height:
-                    self.debug_logger.error(f"!! DÉBORDEMENT DE PAGE DÉTECTÉ pour le bloc {block.id}. Arrêt du rendu pour la page.")
-                    break
-
-                block_width = block.final_bbox[2] - block.final_bbox[0]
-                start_x = block.final_bbox[0]
-                
-                self.debug_logger.info(f"  > Rendu du bloc {block.id} à Y={block_start_y:.2f}")
+            for block in page_data.text_blocks:
+                self.debug_logger.info(f"  > Traitement du TextBlock ID: {block.id}")
+                if not block.final_bbox or not block.spans: continue
                 
                 shape = page.new_shape()
-                y_pos_within_block = block_start_y
-
-                for i, para in enumerate(block.paragraphs):
-                    if not para.spans: continue
-                    if i > 0: y_pos_within_block += 5
-
-                    lines = []
-                    current_line_words = []
-                    current_x_layout = start_x
-                    para_words = [item for span in para.spans for item in [(word, span) for word in span.text.split(' ') if word]]
-                    
-                    if not para_words: continue
-
-                    for word, span in para_words:
-                        width_with_space = self._get_text_width(word + ' ', span.font.name, span.font.size)
-                        if current_line_words and current_x_layout + width_with_space > start_x + block_width:
-                            lines.append(current_line_words)
-                            current_line_words = []
-                            current_x_layout = start_x
-                        
-                        current_line_words.append((word, span))
-                        current_x_layout += width_with_space
-                    
-                    if current_line_words: lines.append(current_line_words)
-
-                    y_line_start = y_pos_within_block
-                    for line_words in lines:
-                        max_ascender, max_line_height = 0, 0
-                        for word, span in line_words:
-                            font = self._get_font(span.font.name)
-                            ascender = font.ascender * span.font.size
-                            descender = abs(font.descender * span.font.size)
-                            if ascender > max_ascender: max_ascender = ascender
-                            if (ascender + descender) > max_line_height: max_line_height = ascender + descender
-                        
-                        if not max_line_height: continue
-                        y_baseline = y_line_start + max_ascender
-                        
-                        current_x_draw = start_x
-                        for word, span in line_words:
-                            font = self._get_font(span.font.name)
-                            word_ascender = font.ascender * span.font.size
-                            y0 = y_baseline - word_ascender
-                            word_width_only = self._get_text_width(word, span.font.name, span.font.size)
-                            if word_width_only <= 0: continue
-                            
-                            word_rect = fitz.Rect(current_x_draw, y0, current_x_draw + word_width_only, y0 + max_line_height)
-                            shape.insert_textbox(word_rect, word, fontname=span.font.name, fontsize=span.font.size, color=self._hex_to_rgb(span.font.color))
-                            current_x_draw += self._get_text_width(word + ' ', span.font.name, span.font.size)
-                        
-                        y_line_start += max_line_height * 1.2
-                    
-                    y_pos_within_block = y_line_start
                 
+                # Suivre la position verticale
+                current_y = block.final_bbox[1]
+                
+                for span in block.spans:
+                    if not span.text.strip(): continue
+
+                    # Calcul du rectangle pour ce span
+                    span_rect = fitz.Rect(
+                        block.final_bbox[0], 
+                        current_y, 
+                        block.final_bbox[2], 
+                        current_y + span.font.size * 1.5 # Estimation de la hauteur
+                    )
+                    
+                    text = span.text
+                    fontname = span.font.name
+                    fontsize = span.font.size
+                    color_rgb = self._hex_to_rgb(span.font.color)
+
+                    self.debug_logger.info(f"    - Rendu du span : text='{text}'")
+                    self.debug_logger.info(f"      -> rect={span_rect}, font='{fontname}', size={fontsize}, color={color_rgb}")
+                    
+                    try:
+                        # Utiliser insert_textbox pour chaque span
+                        rc = shape.insert_textbox(
+                            span_rect,
+                            text,
+                            fontname=fontname,
+                            fontsize=fontsize,
+                            color=color_rgb,
+                            align=block.alignment
+                        )
+                        self.debug_logger.info(f"      -> Texte inséré. Surplus de texte : {rc:.2f}")
+                        if rc < 0:
+                             self.debug_logger.warning("      !! ATTENTION : Le texte a débordé du rectangle alloué.")
+                        
+                        # Mettre à jour la position y pour le prochain span
+                        # Ceci est une simplification et devra être amélioré
+                        current_y += fontsize * 1.2
+
+                    except Exception as e:
+                        self.debug_logger.error(f"    !! ERREUR sur insert_textbox pour span {span.id}: {e}")
+
                 shape.commit()
-                
-                # Le curseur est mis à jour avec la position la plus basse atteinte sur la page
-                page_y_cursor = max(page_y_cursor, y_pos_within_block)
-                self.debug_logger.info(f"    Fin du bloc {block.id}. Curseur plancher est maintenant à y={page_y_cursor:.2f}")
 
         self.debug_logger.info(f"Sauvegarde du PDF final vers : {output_path}")
         doc.save(output_path, garbage=4, deflate=True)
