@@ -21,7 +21,6 @@ class TextExtractor:
         self.style_counter = 1
 
     def _get_style_class(self, font_info: FontInfo) -> str:
-        """Crée ou récupère un nom de classe pour un style de police donné."""
         style_key = (font_info.name, round(font_info.size, 2), font_info.color, font_info.is_bold, font_info.is_italic)
         if style_key in self.style_map:
             return self.style_map[style_key]
@@ -35,7 +34,6 @@ class TextExtractor:
     def create_xliff(self, pages: List[PageObject], source_lang: str, target_lang: str) -> Dict[str, Any]:
         self.styles.clear(); self.style_map.clear(); self.style_counter = 1
 
-        # Pré-peupler la feuille de style pour garantir la cohérence
         for page in pages:
             for block in page.text_blocks:
                 for para in block.paragraphs:
@@ -51,11 +49,10 @@ class TextExtractor:
                 for paragraph in block.paragraphs:
                     p_element = etree.Element('p')
                     for span in paragraph.spans:
-                        # [MODIFICATION FINALE] Ajouter l'ID du span comme une ancre dans le HTML
-                        # C'est la clé pour la réconciliation après la traduction.
+                        # [CORRECTION FINALE] Ajouter l'ID du span comme une ancre dans le HTML
                         span_element = etree.SubElement(p_element, 'span', attrib={
                             'class': self._get_style_class(span.font),
-                            'id': span.id
+                            'id': span.id  # L'ANCRE INDESTRUCTIBLE
                         })
                         span_element.text = span.text
                     
@@ -68,7 +65,6 @@ class TextExtractor:
         
         xliff_string = etree.tostring(root, pretty_print=True, xml_declaration=True, encoding='utf-8').decode('utf-8')
         
-        # Renvoyer la feuille de style avec le XLIFF est crucial
         return { 
             "xliff": xliff_string, 
             "styles": {name: asdict(font) for name, font in self.styles.items()} 
