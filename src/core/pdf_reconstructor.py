@@ -2,7 +2,7 @@
 # -*- coding: utf-8 -*-
 """
 PDF Layout Translator - Moteur de Rendu PDF
-*** VERSION DE DÉBOGAGE - JALON 2.1 (Méthode Directe) ***
+*** VERSION CORRIGÉE - Jalon 2.3 (Utilisation du BBox final) ***
 """
 import logging
 from pathlib import Path
@@ -29,7 +29,7 @@ class PDFReconstructor:
         except ValueError: return (0, 0, 0)
 
     def render_pages(self, pages: List[PageObject], output_path: Path):
-        self.debug_logger.info("--- DÉMARRAGE PDFRECONSTRUCTOR (Jalon 2.1) ---")
+        self.debug_logger.info("--- DÉMARRAGE PDFRECONSTRUCTOR (Jalon 2.3) ---")
         doc = fitz.open()
 
         for page_data in pages:
@@ -50,52 +50,36 @@ class PDFReconstructor:
                 self.debug_logger.info(f"  > Traitement du TextBlock ID: {block.id}")
                 if not block.final_bbox or not block.spans: continue
                 
-                shape = page.new_shape()
+                rect = fitz.Rect(block.final_bbox)
+                if rect.is_empty: continue
                 
-                # Suivre la position verticale
-                current_y = block.final_bbox[1]
+                self.debug_logger.info(f"    - Utilisation du rectangle final_bbox: {rect}")
                 
+                # Créer un TextWriter pour assembler le contenu du bloc
+                writer = fitz.TextWriter(rect)
+
                 for span in block.spans:
-                    if not span.text.strip(): continue
-
-                    # Calcul du rectangle pour ce span
-                    span_rect = fitz.Rect(
-                        block.final_bbox[0], 
-                        current_y, 
-                        block.final_bbox[2], 
-                        current_y + span.font.size * 1.5 # Estimation de la hauteur
+                    # On ne charge plus la police ici, on utilise le nom enregistré
+                    writer.append(
+                        (rect.x0, rect.y0), # La position initiale est gérée par fill_textbox
+                        span.text, 
+                        font=fitz.Font(fontname=span.font.name), 
+                        fontsize=span.font.size
                     )
-                    
-                    text = span.text
-                    fontname = span.font.name
-                    fontsize = span.font.size
-                    color_rgb = self._hex_to_rgb(span.font.color)
+                
+                # Utiliser une Shape pour dessiner le contenu du TextWriter
+                shape = page.new_shape()
+                try:
+                    # La couleur est définie au niveau de la shape, on prend la couleur du premier span
+                    shape.text_writer(
+                        color=self._hex_to_rgb(block.spans[0].font.color)
+                    )
+                    shape.run_text_writer(writer)
+                    shape.commit()
+                    self.debug_logger.info(f"    -> Bloc {block.id} dessiné.")
+                except Exception as e:
+                    self.debug_logger.error(f"    !! ERREUR lors du dessin du bloc {block.id}: {e}")
 
-                    self.debug_logger.info(f"    - Rendu du span : text='{text}'")
-                    self.debug_logger.info(f"      -> rect={span_rect}, font='{fontname}', size={fontsize}, color={color_rgb}")
-                    
-                    try:
-                        # Utiliser insert_textbox pour chaque span
-                        rc = shape.insert_textbox(
-                            span_rect,
-                            text,
-                            fontname=fontname,
-                            fontsize=fontsize,
-                            color=color_rgb,
-                            align=block.alignment
-                        )
-                        self.debug_logger.info(f"      -> Texte inséré. Surplus de texte : {rc:.2f}")
-                        if rc < 0:
-                             self.debug_logger.warning("      !! ATTENTION : Le texte a débordé du rectangle alloué.")
-                        
-                        # Mettre à jour la position y pour le prochain span
-                        # Ceci est une simplification et devra être amélioré
-                        current_y += fontsize * 1.2
-
-                    except Exception as e:
-                        self.debug_logger.error(f"    !! ERREUR sur insert_textbox pour span {span.id}: {e}")
-
-                shape.commit()
 
         self.debug_logger.info(f"Sauvegarde du PDF final vers : {output_path}")
         doc.save(output_path, garbage=4, deflate=True)
