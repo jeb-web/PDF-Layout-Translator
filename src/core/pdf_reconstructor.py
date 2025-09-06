@@ -2,7 +2,7 @@
 # -*- coding: utf-8 -*-
 """
 PDF Layout Translator - Moteur de Rendu PDF
-*** VERSION CORRIGÉE - Jalon 2.6 (Robustesse contre les mots vides) ***
+*** VERSION FINALE - Jalon 2.7 (Gestion Correcte de la Position Verticale) ***
 """
 import logging
 from pathlib import Path
@@ -33,7 +33,6 @@ class PDFReconstructor:
             except Exception as e:
                 self.debug_logger.error(f"Erreur de chargement de la police {font_path}: {e}")
         
-        # Fallback vers la police par défaut de Fitz si tout échoue
         return fitz.Font()
 
 
@@ -53,7 +52,7 @@ class PDFReconstructor:
         return font.text_length(text, fontsize=font_size)
 
     def render_pages(self, pages: List[PageObject], output_path: Path):
-        self.debug_logger.info("--- DÉMARRAGE PDFRECONSTRUCTOR (Jalon 2.6 - Robustesse) ---")
+        self.debug_logger.info("--- DÉMARRAGE PDFRECONSTRUCTOR (Jalon 2.7 - Finale) ---")
         doc = fitz.open()
         self.font_cache.clear()
 
@@ -83,42 +82,41 @@ class PDFReconstructor:
 
                 shape = page.new_shape()
                 
-                max_font_size_in_line = 0
-                
                 for i, para in enumerate(block.paragraphs):
                     if not para.spans:
                         continue
                     
                     self.debug_logger.info(f"    -> Traitement du Paragraphe {para.id}")
 
-                    if i > 0 and max_font_size_in_line > 0:
-                        current_y += max_font_size_in_line * 0.4 
-
+                    # PASSE 1: Organiser les mots en lignes
                     lines = []
-                    current_line = []
+                    current_line_words = []
                     current_x_layout = start_x
                     para_words = []
                     for span in para.spans:
                         text_with_markers = span.text.replace('\n', ' <PARA_BREAK> ')
                         words = text_with_markers.split(' ')
                         for word in words:
-                            # --- CORRECTIF DE ROBUSTESSE ---
-                            # S'assurer que le mot n'est ni vide, ni uniquement composé d'espaces.
                             if word:
                                 para_words.append((word, span))
+                    
+                    if not para_words: continue
 
                     for word, span in para_words:
                         width_with_space = self._get_text_width(word + ' ', span.font.name, span.font.size)
-                        if current_line and current_x_layout + width_with_space > start_x + block_width:
-                            lines.append(current_line)
-                            current_line = []
+                        if current_line_words and current_x_layout + width_with_space > start_x + block_width:
+                            lines.append(current_line_words)
+                            current_line_words = []
                             current_x_layout = start_x
                         
-                        current_line.append((word, span))
+                        current_line_words.append((word, span))
                         current_x_layout += width_with_space
                     
-                    if current_line:
-                        lines.append(current_line)
+                    if current_line_words:
+                        lines.append(current_line_words)
+
+                    # PASSE 2: Dessiner chaque ligne avec un alignement par ligne de base
+                    y_line_start = current_y # Position de départ pour la première ligne de CE paragraphe
 
                     for line_words in lines:
                         max_ascender = 0
@@ -135,8 +133,8 @@ class PDFReconstructor:
                         
                         if not max_line_height: continue
 
-                        y_baseline = current_y + max_ascender
-                        self.debug_logger.info(f"      Ligne à y={current_y:.2f}, Baseline calculée à y={y_baseline:.2f}, Hauteur de ligne: {max_line_height:.2f}")
+                        y_baseline = y_line_start + max_ascender
+                        self.debug_logger.info(f"      Ligne à y={y_line_start:.2f}, Baseline calculée à y={y_baseline:.2f}, Hauteur de ligne: {max_line_height:.2f}")
                         
                         current_x_draw = start_x
                         for word, span in line_words:
@@ -147,17 +145,12 @@ class PDFReconstructor:
                             width_with_space = self._get_text_width(word + ' ', span.font.name, span.font.size)
                             word_width_only = self._get_text_width(word, span.font.name, span.font.size)
 
-                            # Vérification finale pour éviter les rectangles vides
-                            if word_width_only <= 0:
-                                continue
+                            if word_width_only <= 0: continue
 
                             word_rect = fitz.Rect(current_x_draw, y0, current_x_draw + word_width_only, y0 + max_line_height)
                             
-                            self.debug_logger.info(f"        - Mot '{word}' dessiné dans {word_rect}")
-
                             shape.insert_textbox(
-                                word_rect,
-                                word,
+                                word_rect, word,
                                 fontname=span.font.name,
                                 fontsize=span.font.size,
                                 color=self._hex_to_rgb(span.font.color),
@@ -165,7 +158,11 @@ class PDFReconstructor:
                             )
                             current_x_draw += width_with_space
                         
-                        current_y += max_line_height * 1.2
+                        # Mettre à jour la position pour la prochaine ligne DANS ce paragraphe
+                        y_line_start += max_line_height * 1.2
+                    
+                    # Mettre à jour la position verticale principale pour le PROCHAIN paragraphe
+                    current_y = y_line_start
                 
                 shape.commit()
 
