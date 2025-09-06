@@ -13,7 +13,7 @@ class TranslationParser:
         self.logger = logging.getLogger(__name__)
 
     def parse_xliff(self, xliff_content: str) -> Dict[str, str]:
-        self.logger.info("Parsing du fichier XLIFF traduit.")
+        self.logger.info("Parsing du fichier XLIFF traduit (Jalon 2 - Mode Paragraphe)")
         translations = {}
         try:
             xliff_content = xliff_content.replace('xmlns="urn:oasis:names:tc:xliff:document:1.2"', '')
@@ -22,10 +22,11 @@ class TranslationParser:
                 unit_id = trans_unit.get('id')
                 target = trans_unit.find('target')
                 if unit_id and target is not None:
+                    # Les ID sont maintenant des ID de paragraphes
                     translations[unit_id] = target.text.strip() if target.text else ""
         except ElementTree.ParseError as e:
             self.logger.error(f"Erreur de parsing XLIFF: {e}")
             raise ValueError("Le contenu fourni n'est pas un XML XLIFF valide.")
         
-        self.logger.info(f"{len(translations)} traductions parsées avec succès.")
+        self.logger.info(f"{len(translations)} traductions de paragraphes parsées avec succès.")
         return translations
