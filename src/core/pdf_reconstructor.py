@@ -2,8 +2,8 @@
 # -*- coding: utf-8 -*-
 """
 PDF Layout Translator - Moteur de Rendu PDF
-*** VERSION CORRIGÉE - JALON 1.3 (Correction API PyMuPDF) ***
-Utilise la méthode de rendu compatible avec la version PyMuPDF du projet.
+*** VERSION CORRIGÉE - JALON 1.4 (Implémentation API correcte) ***
+Utilise insert_htmlbox avec une gestion des polices simplifiée et correcte.
 """
 import logging
 from pathlib import Path
@@ -19,12 +19,14 @@ class PDFReconstructor:
         self.debug_logger = logging.getLogger('debug_trace')
         self.font_manager = font_manager
         self.style_to_class_map: Dict[tuple, str] = {}
+        # Dictionnaire pour stocker les chemins de polices à archiver
+        self.font_archive: Dict[str, str] = {}
+
 
     def _get_css_for_styles(self, pages: List[PageObject]) -> str:
-        """Génère une feuille de style CSS à partir de tous les styles de police uniques."""
+        """Génère une feuille de style CSS et prépare l'archive des polices."""
         styles = {}
-        # Dictionnaire pour s'assurer que chaque police n'est enregistrée qu'une seule fois
-        self.font_paths_to_register = {}
+        self.font_archive.clear()
 
         for page in pages:
             for block in page.text_blocks:
@@ -35,10 +37,13 @@ class PDFReconstructor:
                     if style_key not in styles:
                         font_path = self.font_manager.get_replacement_font_path(font_info.name)
                         if font_path and font_path.exists():
-                            # Stocker le chemin pour l'enregistrement
-                            self.font_paths_to_register[font_info.name] = str(font_path)
+                            # Le nom de la police dans le CSS doit correspondre exactement au font.name
+                            font_name_in_css = font_info.name
+                            # Stocker le chemin pour l'archive
+                            self.font_archive[font_name_in_css] = str(font_path)
+
                             styles[style_key] = {
-                                'font-family': f"'{font_info.name}'",
+                                'font-family': f"'{font_name_in_css}'",
                                 'font-size': f"{font_info.size}pt",
                                 'color': font_info.color,
                                 'font-weight': 'bold' if font_info.is_bold else 'normal',
@@ -66,20 +71,22 @@ class PDFReconstructor:
         return self.style_to_class_map.get(style_key, "")
 
     def render_pages(self, pages: List[PageObject], output_path: Path):
-        self.debug_logger.info("--- DÉMARRAGE PDFRECONSTRUCTOR (Moteur HTML v1.3 - Utilise insert_htmlbox) ---")
+        self.debug_logger.info("--- DÉMARRAGE PDFRECONSTRUCTOR (Moteur HTML v1.4) ---")
         doc = fitz.open()
 
         # Générer une feuille de style CSS unique pour tout le document
         default_css = self._get_css_for_styles(pages)
         self.debug_logger.info(f"CSS généré pour le document :\n{default_css}")
 
-        # Enregistrer les polices dans un "Font Cache" du document
-        for font_name, font_path in self.font_paths_to_register.items():
+        # PyMuPDF a besoin d'un "archive" pour trouver les polices personnalisées
+        # lors du rendu HTML.
+        archive = fitz.Archive()
+        for font_name, font_path in self.font_archive.items():
             try:
-                doc.add_font_to_cache(font_name, font_path)
-                self.debug_logger.info(f"Police '{font_name}' ajoutée au cache du document depuis {font_path}")
+                archive.add_file(font_name, Path(font_path).read_bytes())
+                self.debug_logger.info(f"Police '{font_name}' ajoutée à l'archive depuis {font_path}")
             except Exception as e:
-                self.debug_logger.error(f"!! ERREUR lors de l'ajout de la police '{font_name}' au cache : {e}")
+                self.debug_logger.error(f"!! ERREUR lors de l'ajout de la police '{font_name}' à l'archive : {e}")
 
         for page_data in pages:
             self.debug_logger.info(f"Traitement de la Page {page_data.page_number} / {len(pages)}")
@@ -109,12 +116,13 @@ class PDFReconstructor:
                 html_string = f'<div style="text-align: {alignment_style}; margin:0; padding:0; line-height: 1.2;">{html_string}</div>'
                 
                 self.debug_logger.info(f"    - HTML généré pour le bloc : {html_string[:250]}...")
-
-                # CORRECTION API : Utilisation de la fonction correcte : insert_htmlbox
+                
+                # CORRECTION API FINALE
                 res = page.insert_htmlbox(
                     rect,
                     html_string,
-                    css=default_css
+                    css=default_css,
+                    archive=archive # L'argument clé pour les polices
                 )
                 self.debug_logger.info(f"    -> Rendu HTML terminé. Texte restant (non inséré) : {res:.2f} (plus c'est proche de 0, mieux c'est)")
 
