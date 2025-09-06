@@ -365,52 +365,55 @@ class MainWindow:
         threading.Thread(target=thread_target, daemon=True).start()
 
     def _prepare_render_version(self, pages: List[PageObject], translations: Dict[str, str]) -> List[PageObject]:
-        render_pages = copy.deepcopy(pages)
+        from lxml import etree
         
-        session_dir = self.session_manager.get_session_directory(self.current_session_id)
-        styles_path = session_dir / "styles.json"
-        styles = {}
-        if styles_path.exists():
-            with open(styles_path, 'r', encoding='utf-8') as f:
-                styles_data = json.load(f)
-                styles = {name: FontInfo(**data) for name, data in styles_data.items()}
+        # On ne copie pas les pages pour garantir que nous modifions les objets originaux
+        # avec toutes leurs informations (bbox, etc.) intactes.
+        
+        # Étape 1: Créer une map de tous les spans du document pour un accès instantané par ID.
+        span_map = {
+            span.id: span 
+            for page in pages 
+            for block in page.text_blocks 
+            for para in block.paragraphs 
+            for span in para.spans
+        }
 
-        # Créer une map d'ID de span vers l'objet span pour un accès rapide
-        span_map = {span.id: span for page in render_pages for block in page.text_blocks for para in block.paragraphs for span in para.spans}
-        
+        # Étape 2: Vider le texte de tous les spans en préparation de la réinjection.
+        # Cela évite de garder du texte original si la traduction redistribue les mots.
+        for span in span_map.values():
+            span.text = ""
+
+        # Étape 3: Parcourir les traductions et réinjecter le texte.
         for para_id, translated_html in translations.items():
-            if not translated_html: continue
+            if not translated_html or not translated_html.strip():
+                continue
 
             try:
-                # Retirer le CDATA s'il est présent
+                # Nettoyer et parser le HTML traduit
                 if translated_html.strip().startswith('<![CDATA['):
                     translated_html = translated_html.strip()[9:-3]
-
+                
                 parser = etree.HTMLParser()
                 root = etree.fromstring(f"<div>{translated_html.strip()}</div>", parser)
                 p_node = root.find('.//p')
                 
                 if p_node is None: continue
 
-                # D'abord, vider le texte de tous les spans du paragraphe original
-                original_para = next((para for page in render_pages for block in page.text_blocks for para in block.paragraphs if para.id == para_id), None)
-                if original_para:
-                    for span in original_para.spans:
-                        span.text = ""
-
-                # Ensuite, on réinjecte le texte traduit dans les bons spans
-                for node in p_node:
+                # Réinjecter le texte traduit dans les spans originaux via la map
+                for node in p_node.iter(): # itérer sur tous les noeuds, y compris le texte de queue
                     if node.tag == 'span':
                         span_id = node.get('id')
-                        translated_text = (node.text or "") + (node.tail or "")
-                        
                         if span_id in span_map:
-                            span_map[span_id].text = translated_text
+                            # [LOGIQUE FINALE] On MODIFIE le span original.
+                            # On concatène le texte du noeud et sa "queue" (texte après la balise fermante)
+                            span_map[span_id].text = (node.text or "") + (node.tail or "")
                         
             except Exception as e:
                 self.debug_logger.error(f"Erreur de reconstruction pour le paragraphe {para_id}: {e}")
 
-        return render_pages
+        # La structure 'pages' a été modifiée en place. On la retourne.
+        return pages
 
     def _export_pdf(self):
         output_filename = self.output_filename_var.get().strip()
@@ -502,3 +505,4 @@ class ToolTip:
     def hide_tooltip(self, event):
         if self.tooltip_window: self.tooltip_window.destroy()
         self.tooltip_window = None
+
