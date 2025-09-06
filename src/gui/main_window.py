@@ -374,23 +374,37 @@ class MainWindow:
                 self._set_processing(False)
         threading.Thread(target=thread_target, daemon=True).start()
         
-# Dans PDF-Layout-Translator-main/src/gui/main_window.py
-
     def _prepare_render_version(self, pages: List[PageObject], translations: Dict[str, str]) -> List[PageObject]:
         import copy
         render_pages = copy.deepcopy(pages)
+        
         for page in render_pages:
             for block in page.text_blocks:
-                for span in block.spans:
-                    # On applique la traduction à chaque span individuellement.
-                    # Le texte original est remplacé par le texte traduit.
-                    translated_text = translations.get(span.id)
-                    if translated_text is not None and translated_text.strip():
-                        span.text = translated_text
-                    elif span.text.strip():
-                        # Si pas de traduction, on garde le texte original pour ne pas créer de "trous"
+                # [JALON 2] Logique d'application des traductions par paragraphe
+                for paragraph in block.paragraphs:
+                    translated_text = translations.get(paragraph.id)
+                    
+                    if translated_text is not None and paragraph.spans:
+                        # Solution temporaire pour ce jalon :
+                        # On met tout le texte traduit dans le premier span...
+                        paragraph.spans[0].text = translated_text
+                        # ...et on supprime les autres pour éviter les duplications.
+                        # Cela va casser le multi-style, ce qui est le résultat attendu pour ce test.
+                        original_first_span = paragraph.spans[0]
+                        paragraph.spans.clear()
+                        paragraph.spans.append(original_first_span)
+                    elif not paragraph.spans:
+                        # Paragraphe vide, on ne fait rien
                         pass
-        self.debug_logger.info("'Version à Rendre' créée : le texte de chaque segment est maintenant final.")
+                    else:
+                        # Si pas de traduction, on garde le texte original
+                        # Pour cela, on ne fait rien, les spans originaux sont conservés
+                        pass
+                
+                # Mettre à jour la liste plate de spans pour les modules suivants
+                block.spans = [span for para in block.paragraphs for span in para.spans]
+
+        self.debug_logger.info("'Version à Rendre' créée (Jalon 2) : la traduction par paragraphe a été appliquée.")
         return render_pages
 
     def _export_pdf(self):
@@ -458,6 +472,7 @@ class ToolTip:
     def hide_tooltip(self, event):
         if self.tooltip_window: self.tooltip_window.destroy()
         self.tooltip_window = None
+
 
 
 
