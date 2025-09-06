@@ -2,7 +2,7 @@
 # -*- coding: utf-8 -*-
 """
 PDF Layout Translator - Moteur de Rendu PDF
-*** VERSION DE TEST - Jalon 2.11 (Test de Débordement de Page) ***
+*** VERSION FINALE - Jalon 3.0 (Logique Hybride) ***
 """
 import logging
 from pathlib import Path
@@ -34,7 +34,6 @@ class PDFReconstructor:
         
         return fitz.Font()
 
-
     def _hex_to_rgb(self, hex_color: str) -> Tuple[float, float, float]:
         hex_color = hex_color.lstrip('#')
         if len(hex_color) == 3: hex_color = "".join([c * 2 for c in hex_color])
@@ -51,7 +50,7 @@ class PDFReconstructor:
         return font.text_length(text, fontsize=font_size)
 
     def render_pages(self, pages: List[PageObject], output_path: Path):
-        self.debug_logger.info("--- DÉMARRAGE PDFRECONSTRUCTOR (Jalon 2.11 - Test de Débordement) ---")
+        self.debug_logger.info("--- DÉMARRAGE PDFRECONSTRUCTOR (Jalon 3.0 - Hybride) ---")
         doc = fitz.open()
         self.font_cache.clear()
 
@@ -71,46 +70,39 @@ class PDFReconstructor:
             
             sorted_blocks = sorted(page_data.text_blocks, key=lambda b: (b.bbox[1], b.bbox[0]))
             
-            page_y_cursor = sorted_blocks[0].bbox[1] if sorted_blocks else 0
-            self.debug_logger.info(f"  Curseur vertical initialisé à y={page_y_cursor:.2f} pour la Page {page_data.page_number}")
+            page_y_cursor = 0.0
+            if sorted_blocks:
+                page_y_cursor = sorted_blocks[0].bbox[1]
 
             for block in sorted_blocks:
                 if not block.final_bbox or not block.paragraphs:
                     continue
 
-                original_y = block.bbox[1]
-                block_start_y = max(original_y, page_y_cursor)
-                
-                # --- GARDE DE SÉCURITÉ POUR VALIDATION ---
+                # Logique du curseur plancher hybride
+                block_start_y = block.bbox[1]
+                if block.is_vertically_extended:
+                    block_start_y = max(block.bbox[1], page_y_cursor)
+
                 if block_start_y > page.rect.height:
-                    self.debug_logger.error(f"!! DÉBORDEMENT DE PAGE DÉTECTÉ pour le bloc {block.id}.")
-                    self.debug_logger.error(f"   La position de départ calculée ({block_start_y:.2f}) dépasse la hauteur de la page ({page.rect.height:.2f}).")
-                    self.debug_logger.error(f"   Arrêt du rendu pour la page {page_data.page_number} pour éviter la corruption.")
-                    break  # Arrête de dessiner les blocs sur cette page
+                    self.debug_logger.error(f"!! DÉBORDEMENT DE PAGE DÉTECTÉ pour le bloc {block.id}. Arrêt du rendu pour la page.")
+                    break
 
                 block_width = block.final_bbox[2] - block.final_bbox[0]
                 start_x = block.final_bbox[0]
                 
-                self.debug_logger.info(f"  > Rendu du bloc {block.id}. Original Y: {original_y:.2f}, Curseur Y: {page_y_cursor:.2f}. Début du dessin à Y={block_start_y:.2f}")
+                self.debug_logger.info(f"  > Rendu du bloc {block.id} à Y={block_start_y:.2f}")
                 
                 shape = page.new_shape()
                 y_pos_within_block = block_start_y
 
                 for i, para in enumerate(block.paragraphs):
                     if not para.spans: continue
-                    
-                    if i > 0:
-                         y_pos_within_block += 5
+                    if i > 0: y_pos_within_block += 5
 
                     lines = []
                     current_line_words = []
                     current_x_layout = start_x
-                    para_words = []
-                    for span in para.spans:
-                        text_with_markers = span.text.replace('\n', ' <PARA_BREAK> ')
-                        words = text_with_markers.split(' ')
-                        for word in words:
-                            if word: para_words.append((word, span))
+                    para_words = [item for span in para.spans for item in [(word, span) for word in span.text.split(' ') if word]]
                     
                     if not para_words: continue
 
@@ -127,11 +119,8 @@ class PDFReconstructor:
                     if current_line_words: lines.append(current_line_words)
 
                     y_line_start = y_pos_within_block
-
                     for line_words in lines:
-                        max_ascender = 0
-                        max_line_height = 0
-
+                        max_ascender, max_line_height = 0, 0
                         for word, span in line_words:
                             font = self._get_font(span.font.name)
                             ascender = font.ascender * span.font.size
@@ -140,7 +129,6 @@ class PDFReconstructor:
                             if (ascender + descender) > max_line_height: max_line_height = ascender + descender
                         
                         if not max_line_height: continue
-
                         y_baseline = y_line_start + max_ascender
                         
                         current_x_draw = start_x
@@ -148,30 +136,22 @@ class PDFReconstructor:
                             font = self._get_font(span.font.name)
                             word_ascender = font.ascender * span.font.size
                             y0 = y_baseline - word_ascender
-
                             word_width_only = self._get_text_width(word, span.font.name, span.font.size)
                             if word_width_only <= 0: continue
-                            width_with_space = self._get_text_width(word + ' ', span.font.name, span.font.size)
-
-                            word_rect = fitz.Rect(current_x_draw, y0, current_x_draw + word_width_only, y0 + max_line_height)
                             
-                            shape.insert_textbox(
-                                word_rect, word,
-                                fontname=span.font.name,
-                                fontsize=span.font.size,
-                                color=self._hex_to_rgb(span.font.color),
-                                align=fitz.TEXT_ALIGN_LEFT
-                            )
-                            current_x_draw += width_with_space
+                            word_rect = fitz.Rect(current_x_draw, y0, current_x_draw + word_width_only, y0 + max_line_height)
+                            shape.insert_textbox(word_rect, word, fontname=span.font.name, fontsize=span.font.size, color=self._hex_to_rgb(span.font.color))
+                            current_x_draw += self._get_text_width(word + ' ', span.font.name, span.font.size)
                         
                         y_line_start += max_line_height * 1.2
                     
                     y_pos_within_block = y_line_start
-
+                
                 shape.commit()
                 
-                page_y_cursor = y_pos_within_block
-                self.debug_logger.info(f"    Fin du bloc {block.id}. Curseur plancher mis à jour à y={page_y_cursor:.2f}")
+                # Le curseur est mis à jour avec la position la plus basse atteinte sur la page
+                page_y_cursor = max(page_y_cursor, y_pos_within_block)
+                self.debug_logger.info(f"    Fin du bloc {block.id}. Curseur plancher est maintenant à y={page_y_cursor:.2f}")
 
         self.debug_logger.info(f"Sauvegarde du PDF final vers : {output_path}")
         doc.save(output_path, garbage=4, deflate=True)
