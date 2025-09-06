@@ -18,6 +18,7 @@ import json
 import os
 from dataclasses import asdict
 from lxml import etree
+import copy
 
 from core.session_manager import SessionManager
 from core.pdf_analyzer import PDFAnalyzer
@@ -27,7 +28,6 @@ from core.auto_translator import AutoTranslator, GOOGLETRANS_AVAILABLE
 from utils.font_manager import FontManager
 from core.layout_processor import LayoutProcessor
 from core.pdf_reconstructor import PDFReconstructor
-# [JALON 2] Ajout des imports nécessaires
 from core.data_model import PageObject, TextBlock, TextSpan, FontInfo, Paragraph
 from gui.font_dialog import FontDialog
 
@@ -211,7 +211,7 @@ class MainWindow:
         session_dir = self.session_manager.get_session_directory(session_id)
         if session_dir:
             handler = logging.FileHandler(session_dir / "debug_session_trace.log", mode='w', encoding='utf-8')
-            handler.setFormatter(logging.Formatter('%(asctime)s - %(message)s'))
+            handler.setFormatter(logging.Formatter('%(asctime)s - %(levelname)s - %(name)s - %(message)s'))
             if self.debug_logger.hasHandlers(): self.debug_logger.handlers.clear()
             self.debug_logger.addHandler(handler)
             self.debug_logger.setLevel(logging.INFO)
@@ -271,13 +271,19 @@ class MainWindow:
             self._set_processing(True, "Génération du fichier XLIFF...")
             try:
                 page_objects = self._load_dom_from_file(self.current_session_id, "1_dom_analysis.json")
-                xliff_content = self.text_extractor.create_xliff(page_objects, self.source_lang_var.get(), self.target_lang_var.get())
+                extraction_result = self.text_extractor.create_xliff(page_objects, self.source_lang_var.get(), self.target_lang_var.get())
+                xliff_content = extraction_result["xliff"]
+                styles = extraction_result["styles"]
                 session_dir = self.session_manager.get_session_directory(self.current_session_id)
+                
                 xliff_path = session_dir / "2_xliff_to_translate.xliff"
                 with open(xliff_path, "w", encoding="utf-8") as f: f.write(xliff_content)
-                self.debug_logger.info(f"Fichier de débogage '2_xliff_to_translate.xliff' sauvegardé.")
+                
+                styles_path = session_dir / "styles.json"
+                with open(styles_path, "w", encoding="utf-8") as f: json.dump(styles, f, indent=2)
+
                 self.root.after(0, lambda: self.open_export_folder_button.config(state='normal'))
-                self.root.after(0, lambda: messagebox.showinfo("Succès", f"Fichier '2_xliff_to_translate.xliff' créé dans le dossier de la session."))
+                self.root.after(0, lambda: messagebox.showinfo("Succès", f"Fichiers de traduction créés."))
             except Exception as e:
                 self.logger.error(f"Erreur d'export XLIFF: {e}", exc_info=True)
                 self.root.after(0, lambda e=e: messagebox.showerror("Erreur d'Export", str(e)))
@@ -288,25 +294,25 @@ class MainWindow:
     def _auto_translate(self):
         if not self.current_session_id: return messagebox.showerror("Erreur", "Aucune session active.")
         def thread_target():
-            self._set_processing(True, "Lancement de la traduction automatique...")
+            self._set_processing(True, "Traduction automatique en cours...")
             try:
-                self.debug_logger.info("Auto-Traduction: Étape 1/3 - Génération du XLIFF en mémoire...")
-                page_objects = self._load_dom_from_file(self.current_session_id, "1_dom_analysis.json")
-                xliff_content = self.text_extractor.create_xliff(page_objects, self.source_lang_var.get(), self.target_lang_var.get())
                 session_dir = self.session_manager.get_session_directory(self.current_session_id)
+                page_objects = self._load_dom_from_file(self.current_session_id, "1_dom_analysis.json")
+                extraction_result = self.text_extractor.create_xliff(page_objects, self.source_lang_var.get(), self.target_lang_var.get())
+                xliff_content = extraction_result["xliff"]
+                styles = extraction_result["styles"]
+                
                 with open(session_dir / "2_xliff_to_translate.xliff", "w", encoding="utf-8") as f: f.write(xliff_content)
-                self.debug_logger.info("Fichier de débogage '2_xliff_to_translate.xliff' sauvegardé.")
-                self.debug_logger.info("Auto-Traduction: Étape 2/3 - Envoi au service de traduction...")
+                with open(session_dir / "styles.json", "w", encoding="utf-8") as f: json.dump(styles, f, indent=2)
+
                 translated_xliff = self.auto_translator.translate_xliff_content(xliff_content, self.target_lang_var.get())
                 with open(session_dir / "3_xliff_translated.xliff", "w", encoding="utf-8") as f: f.write(translated_xliff)
-                self.debug_logger.info("Fichier de débogage '3_xliff_translated.xliff' sauvegardé.")
-                self.debug_logger.info("Auto-Traduction: Étape 3/3 - Affichage du résultat.")
+
                 self.root.after(0, lambda: self.translation_input.delete('1.0', tk.END))
                 self.root.after(0, lambda: self.translation_input.insert('1.0', translated_xliff))
-                self.root.after(0, lambda: messagebox.showinfo("Succès", "Traduction automatique terminée et insérée dans le champ de texte."))
+                self.root.after(0, lambda: messagebox.showinfo("Succès", "Traduction automatique terminée."))
             except Exception as e:
                 self.logger.error(f"Erreur de traduction automatique: {e}", exc_info=True)
-                self.debug_logger.error(f"ERREUR FATALE pendant la traduction automatique: {e}")
                 self.root.after(0, lambda e=e: messagebox.showerror("Erreur de Traduction", str(e)))
             finally:
                 self._set_processing(False)
@@ -321,9 +327,9 @@ class MainWindow:
                 translations = self.translation_parser.parse_xliff(xliff_content)
                 session_dir = self.session_manager.get_session_directory(self.current_session_id)
                 with open(session_dir / "4_parsed_translations.json", "w", encoding="utf-8") as f: json.dump(translations, f, indent=2)
-                self.debug_logger.info(f"Fichier de débogage '4_parsed_translations.json' sauvegardé avec {len(translations)} éléments.")
+                self.debug_logger.info(f"Fichier de débogage '4_parsed_translations.json' sauvegardé.")
                 self.root.after(0, lambda: self.continue_to_layout_button.config(state='normal'))
-                self.root.after(0, lambda: messagebox.showinfo("Succès", f"{len(translations)} traductions importées avec succès."))
+                self.root.after(0, lambda: messagebox.showinfo("Succès", f"{len(translations)} traductions importées."))
             except Exception as e:
                 self.logger.error(f"Erreur de validation: {e}", exc_info=True)
                 self.root.after(0, lambda e=e: messagebox.showerror("Erreur de Validation", str(e)))
@@ -335,21 +341,20 @@ class MainWindow:
         def thread_target():
             self._set_processing(True, "Calcul de la mise en page...")
             try:
-                self.debug_logger.info("--- Début du Traitement de la Mise en Page ---")
                 session_dir = self.session_manager.get_session_directory(self.current_session_id)
-                self.debug_logger.info("Étape 1/3: Chargement des données (DOM original et traductions)...")
                 page_objects = self._load_dom_from_file(self.current_session_id, "1_dom_analysis.json")
                 with open(session_dir / "4_parsed_translations.json", "r", encoding="utf-8") as f:
                     translations = json.load(f)
-                self.debug_logger.info("Étape 2/3: Préparation de la 'Version à Rendre'...")
+                
                 render_version = self._prepare_render_version(page_objects, translations)
-                self.debug_logger.info("Étape 3/3: Lancement du calcul de reflow (LayoutProcessor)...")
+                
                 final_pages = self.layout_processor.process_pages(render_version)
                 with open(session_dir / "5_final_layout.json", "w", encoding="utf-8") as f: json.dump([asdict(p) for p in final_pages], f, indent=2)
                 self.debug_logger.info("Fichier de débogage '5_final_layout.json' sauvegardé.")
+                
                 self.root.after(0, lambda: self.layout_results_text.config(state='normal'))
                 self.root.after(0, lambda: self.layout_results_text.delete('1.0', tk.END))
-                self.root.after(0, lambda: self.layout_results_text.insert('1.0', "Calcul du reflow terminé. Prêt pour l'export."))
+                self.root.after(0, lambda: self.layout_results_text.insert('1.0', "Calcul du reflow terminé."))
                 self.root.after(0, lambda: self.layout_results_text.config(state='disabled'))
                 self.root.after(0, lambda: self.continue_to_export_button.config(state='normal'))
             except Exception as e:
@@ -360,83 +365,50 @@ class MainWindow:
         threading.Thread(target=thread_target, daemon=True).start()
 
     def _prepare_render_version(self, pages: List[PageObject], translations: Dict[str, str]) -> List[PageObject]:
-        import copy
-        from lxml import etree # Nécessaire pour parser le HTML
-
-        self.debug_logger.info("'Version à Rendre' (Jalon 2) : Reconstruction depuis HTML...")
         render_pages = copy.deepcopy(pages)
         
-        # Recréer la table de styles utilisée lors de l'extraction
-        # C'est un hack temporaire. Idéalement, la feuille de style serait passée avec les données.
+        session_dir = self.session_manager.get_session_directory(self.current_session_id)
+        styles_path = session_dir / "styles.json"
         styles = {}
-        style_counter = 1
-        def get_style_class(font_info: FontInfo):
-            nonlocal styles, style_counter
-            style_key = (font_info.name, font_info.size, font_info.color, font_info.is_bold, font_info.is_italic)
-            for class_name, style in styles.items():
-                if style == style_key:
-                    return class_name
-            class_name = f"c{style_counter}"
-            styles[class_name] = style_key
-            style_counter += 1
-            return class_name
-        
-        # Pré-peupler les styles
-        for p in pages:
-            for b in p.text_blocks:
-                for para in b.paragraphs:
-                    for s in para.spans:
-                        get_style_class(s.font)
-        
-        # Inverser le dictionnaire pour un accès facile
-        class_to_style = {v: k for k, v in styles.items()}
-        
-        for page in render_pages:
-            for block in page.text_blocks:
-                new_paragraphs = []
-                for paragraph in block.paragraphs:
-                    translated_html = translations.get(paragraph.id)
-                    
-                    if translated_html is None:
-                        new_paragraphs.append(paragraph)
-                        continue
+        if styles_path.exists():
+            with open(styles_path, 'r', encoding='utf-8') as f:
+                styles_data = json.load(f)
+                styles = {name: FontInfo(**data) for name, data in styles_data.items()}
 
-                    # Parser le HTML
-                    try:
-                        # Retirer le CDATA pour le parsing
-                        if translated_html.startswith('<![CDATA['):
-                            translated_html = translated_html[9:-3]
+        # Créer une map d'ID de span vers l'objet span pour un accès rapide
+        span_map = {span.id: span for page in render_pages for block in page.text_blocks for para in block.paragraphs for span in para.spans}
+        
+        for para_id, translated_html in translations.items():
+            if not translated_html: continue
+
+            try:
+                # Retirer le CDATA s'il est présent
+                if translated_html.strip().startswith('<![CDATA['):
+                    translated_html = translated_html.strip()[9:-3]
+
+                parser = etree.HTMLParser()
+                root = etree.fromstring(f"<div>{translated_html.strip()}</div>", parser)
+                p_node = root.find('.//p')
+                
+                if p_node is None: continue
+
+                # D'abord, vider le texte de tous les spans du paragraphe original
+                original_para = next((para for page in render_pages for block in page.text_blocks for para in block.paragraphs if para.id == para_id), None)
+                if original_para:
+                    for span in original_para.spans:
+                        span.text = ""
+
+                # Ensuite, on réinjecte le texte traduit dans les bons spans
+                for node in p_node:
+                    if node.tag == 'span':
+                        span_id = node.get('id')
+                        translated_text = (node.text or "") + (node.tail or "")
                         
-                        root = etree.fromstring(translated_html)
-                        new_spans = []
-                        span_counter = 0
-
-                        for node in root.iterchildren():
-                            if node.tag == 'span':
-                                class_name = node.get('class')
-                                style_key = styles.get(class_name)
-                                if style_key:
-                                    font_info = FontInfo(name=style_key[0], size=style_key[1], color=style_key[2], is_bold=style_key[3], is_italic=style_key[4])
-                                    text = node.text or ""
-                                    
-                                    span_id = f"{paragraph.id}_S{span_counter+1}"
-                                    new_spans.append(TextSpan(id=span_id, text=text, font=font_info, bbox=(0,0,0,0)))
-                                    span_counter += 1
-
-                                    # Vérifier si un <br/> suit ce span
-                                    if node.tail and '<br/>' in node.tail:
-                                        new_spans[-1].forces_line_break = True
+                        if span_id in span_map:
+                            span_map[span_id].text = translated_text
                         
-                        new_para = Paragraph(id=paragraph.id, spans=new_spans)
-                        new_paragraphs.append(new_para)
-
-                    except Exception as e:
-                        self.debug_logger.error(f"Erreur de parsing HTML pour le paragraphe {paragraph.id}: {e}")
-                        # En cas d'échec, on garde le paragraphe original pour ne pas avoir de trou.
-                        new_paragraphs.append(paragraph)
-
-                block.paragraphs = new_paragraphs
-                block.spans = [span for para in block.paragraphs for span in para.spans]
+            except Exception as e:
+                self.debug_logger.error(f"Erreur de reconstruction pour le paragraphe {para_id}: {e}")
 
         return render_pages
 
@@ -453,7 +425,7 @@ class MainWindow:
                 self.pdf_reconstructor.render_pages(final_pages, output_path)
                 self._output_folder = output_path.parent
                 self.root.after(0, lambda: self.open_output_folder_button.config(state='normal'))
-                self.root.after(0, lambda: messagebox.showinfo("Succès", f"Le PDF final a été exporté avec succès:\n{output_path}"))
+                self.root.after(0, lambda: messagebox.showinfo("Succès", f"PDF exporté vers:\n{output_path}"))
             except Exception as e:
                 self.logger.error(f"Erreur d'export PDF: {e}", exc_info=True)
                 self.root.after(0, lambda e=e: messagebox.showerror("Erreur d'Export", str(e)))
@@ -468,35 +440,37 @@ class MainWindow:
         
         pages = []
         for page_data in data:
-            page_obj = PageObject(
-                page_number=page_data['page_number'],
-                dimensions=tuple(page_data['dimensions'])
-            )
+            page_obj = PageObject(page_number=page_data['page_number'], dimensions=tuple(page_data['dimensions']))
             
             for block_data in page_data.get('text_blocks', []):
-                block_obj = TextBlock(
-                    id=block_data['id'],
-                    bbox=tuple(block_data['bbox']),
-                    alignment=block_data.get('alignment', 0)
-                )
+                block_obj = TextBlock(id=block_data['id'], bbox=tuple(block_data['bbox']), alignment=block_data.get('alignment', 0))
+                
+                # Le 'spans' plat est maintenant la source de vérité pour le chargement
+                for span_data in block_data.get('spans', []):
+                    font_info = FontInfo(**span_data['font'])
+                    span_obj = TextSpan(
+                        id=span_data['id'],
+                        text=span_data['text'],
+                        bbox=tuple(span_data['bbox']),
+                        font=font_info
+                    )
+                    block_obj.spans.append(span_obj) # Remplir la liste plate
+                
+                # Reconstruire la structure en paragraphes à partir de la liste plate
+                if block_obj.spans:
+                    para_id_prefix = block_obj.spans[0].id.rsplit('_S', 1)[0].replace('_L', '_P')
+                    current_para_spans = []
+                    para_counter = 1
+                    current_para_id = f"{para_id_prefix}{para_counter}"
 
-                for para_data in block_data.get('paragraphs', []):
-                    para_obj = Paragraph(id=para_data['id'])
+                    for span in block_obj.spans:
+                        current_para_spans.append(span)
+                        # On ne peut plus se fier aux flags du modèle, on assume un para par bloc pour l'instant
+                        # Ceci sera corrigé par la vraie analyse
                     
-                    for span_data in para_data.get('spans', []):
-                        font_info = FontInfo(**span_data['font'])
-                        span_obj = TextSpan(
-                            id=span_data['id'],
-                            text=span_data['text'],
-                            bbox=tuple(span_data['bbox']),
-                            font=font_info
-                        )
-                        para_obj.spans.append(span_obj)
-                    
-                    block_obj.paragraphs.append(para_obj)
-                
-                block_obj.spans = [span for para in block_obj.paragraphs for span in para.spans]
-                
+                    if current_para_spans:
+                         block_obj.paragraphs.append(Paragraph(id=current_para_id, spans=current_para_spans))
+
                 page_obj.text_blocks.append(block_obj)
 
             pages.append(page_obj)
@@ -528,4 +502,3 @@ class ToolTip:
     def hide_tooltip(self, event):
         if self.tooltip_window: self.tooltip_window.destroy()
         self.tooltip_window = None
-
