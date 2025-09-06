@@ -36,11 +36,11 @@ class TextBlock:
     paragraphs: List[Paragraph] = field(default_factory=list)
     alignment: int = 0
     
-    # Champs pour la nouvelle logique de layout
+    # Champ final pour la géométrie décidée par le LayoutProcessor
     final_bbox: Tuple[float, float, float, float] = None
-    original_height: float = 0.0
-    char_spacing: float = 0.0
-    font_size_reduction: float = 0.0
+    
+    # Drapeau pour communiquer la décision du LayoutProcessor au Reconstructor
+    is_vertically_extended: bool = False
     
     # Spans aplatis pour un accès facile (ne pas inclure dans la représentation)
     spans: List[TextSpan] = field(default_factory=list, repr=False)
