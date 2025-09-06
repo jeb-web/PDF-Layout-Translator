@@ -2,7 +2,7 @@
 # -*- coding: utf-8 -*-
 """
 PDF Layout Translator - Moteur de Mise en Page
-*** VERSION 2.1 - GESTION MULTI-STYLE ET PARAGRAPHES ***
+*** VERSION FINALE - GESTION DES PARAGRAPHES ET STYLES ***
 """
 import logging
 from typing import List
@@ -28,7 +28,7 @@ class LayoutProcessor:
         return len(text) * font_size * 0.6
 
     def process_pages(self, pages: List[PageObject]) -> List[PageObject]:
-        self.debug_logger.info("LayoutProcessor: Démarrage du calcul du reflow (v2.1).")
+        self.debug_logger.info("LayoutProcessor: Démarrage du calcul du reflow (Finale).")
         for page in pages:
             for block in page.text_blocks:
                 original_width = block.bbox[2] - block.bbox[0]
@@ -36,46 +36,42 @@ class LayoutProcessor:
                     block.final_bbox = block.bbox
                     continue
 
-                current_x = 0
-                current_y = 0
-                max_line_height = 0
-                
-                if block.spans:
-                    # Initialiser la hauteur avec la hauteur de la première ligne
-                    max_line_height = block.spans[0].font.size * 1.2
-                    current_y = max_line_height
-
+                all_words = []
                 for span in block.spans:
-                    # La hauteur de ligne est dominée par la plus grande police sur la ligne
-                    if span.font.size * 1.2 > max_line_height:
-                        max_line_height = span.font.size * 1.2
-
-                    words = span.text.strip().split(' ')
-                    for i, word in enumerate(words):
-                        # Ajouter un espace après le mot, sauf si c'est le dernier mot du span
-                        word_to_draw = word + (' ' if i < len(words) - 1 else '')
-                        word_width = self._get_text_width(word_to_draw, span.font.name, span.font.size)
-                        
-                        if current_x + word_width > original_width and current_x > 0:
-                            # Saut de ligne naturel
-                            current_x = 0
-                            current_y += max_line_height
-                            max_line_height = span.font.size * 1.2 # Réinitialiser pour la nouvelle ligne
-                        
-                        current_x += word_width
-                    
-                    # Si le span est le dernier de sa ligne originale, forcer un saut de ligne
-                    if span.is_last_in_line:
-                        current_x = 0
-                        current_y += max_line_height
-                        if block.spans: # Eviter l'erreur si c'est le dernier span
-                            next_span_index = block.spans.index(span) + 1
-                            if next_span_index < len(block.spans):
-                                max_line_height = block.spans[next_span_index].font.size * 1.2
+                    if span.text:
+                        # Remplacer les sauts de ligne par un marqueur spécial
+                        text_with_markers = span.text.replace('\n', ' <PARA_BREAK> ')
+                        words = text_with_markers.split(' ')
+                        for i, word in enumerate(words):
+                            all_words.append((word, span))
                 
-                new_height = current_y
+                if not all_words:
+                    block.final_bbox = block.bbox
+                    continue
+
+                current_x = 0
+                max_font_size_in_line = all_words[0][1].font.size
+                total_height = max_font_size_in_line * 1.2
+                
+                for word, span in all_words:
+                    if word == '<PARA_BREAK>':
+                        current_x = 0
+                        total_height += max_font_size_in_line * 1.2
+                        max_font_size_in_line = span.font.size
+                        continue
+
+                    word_width = self._get_text_width(word + ' ', span.font.name, span.font.size)
+                    
+                    if current_x + word_width > original_width and current_x > 0:
+                        current_x = 0
+                        total_height += max_font_size_in_line * 1.2
+                        max_font_size_in_line = span.font.size
+                    
+                    if span.font.size > max_font_size_in_line:
+                        max_font_size_in_line = span.font.size
+
+                    current_x += word_width
+                
+                new_height = total_height
                 block.final_bbox = (block.bbox[0], block.bbox[1], block.bbox[2], block.bbox[1] + new_height)
-                self.debug_logger.info(f"  - Bloc {block.id}: Nouvelle hauteur multi-style calculée: {new_height:.2f}pt.")
-        
-        self.debug_logger.info("LayoutProcessor: Calcul du reflow terminé.")
         return pages
