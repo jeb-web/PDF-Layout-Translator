@@ -427,55 +427,73 @@ class MainWindow:
     def _load_dom_from_file(self, session_id: str, filename: str) -> List[PageObject]:
         session_dir = self.session_manager.get_session_directory(session_id)
         file_path = session_dir / filename
-        self.debug_logger.info(f"--- Démarrage de _load_dom_from_file pour '{filename}' ---")
-        with open(file_path, 'r', encoding='utf-8') as f: data = json.load(f)
-        
+        self.debug_logger.info(f"--- Démarrage de _load_dom_from_file (CORRIGÉ) pour '{filename}' ---")
+        with open(file_path, 'r', encoding='utf-8') as f:
+            data = json.load(f)
+
         pages = []
         for page_data in data:
             page_obj = PageObject(page_number=page_data['page_number'], dimensions=tuple(page_data['dimensions']))
-            
+
             for block_data in page_data.get('text_blocks', []):
                 block_obj = TextBlock(
-                    id=block_data['id'], 
-                    bbox=tuple(block_data['bbox']), 
+                    id=block_data['id'],
+                    bbox=tuple(block_data['bbox']),
                     alignment=block_data.get('alignment', 0)
                 )
 
-                # CORRECTION : Lire final_bbox depuis le fichier JSON
                 final_bbox_data = block_data.get('final_bbox')
                 if final_bbox_data:
                     block_obj.final_bbox = tuple(final_bbox_data)
-                    self.debug_logger.info(f"  -> Lecture du bloc {block_obj.id} avec final_bbox: {block_obj.final_bbox}")
                 else:
-                    block_obj.final_bbox = None
-                    self.debug_logger.warning(f"  -> !! final_bbox non trouvé pour le bloc {block_obj.id} dans {filename}")
+                    # Fallback au bbox original si final_bbox n'est pas encore calculé (ex: dans 1_dom_analysis.json)
+                    block_obj.final_bbox = tuple(block_data['bbox'])
 
-                for span_data in block_data.get('spans', []):
-                    font_info = FontInfo(**span_data['font'])
-                    span_obj = TextSpan(
-                        id=span_data['id'],
-                        text=span_data['text'],
-                        bbox=tuple(span_data['bbox']),
-                        font=font_info
-                    )
-                    block_obj.spans.append(span_obj)
-                
-                if block_obj.spans:
-                    para_id_prefix = block_obj.spans[0].id.rsplit('_S', 1)[0].replace('_L', '_P')
-                    current_para_spans = []
-                    para_counter = 1
-                    current_para_id = f"{para_id_prefix}{para_counter}"
-
-                    for span in block_obj.spans:
-                        current_para_spans.append(span)
+                # --- CORRECTION MAJEURE : Lire la structure de paragraphes préservée ---
+                all_spans_in_block = []
+                if 'paragraphs' in block_data and block_data['paragraphs']:
+                    self.debug_logger.info(f"  -> Lecture de {len(block_data['paragraphs'])} paragraphes pour le bloc {block_obj.id}")
+                    for para_data in block_data['paragraphs']:
+                        para_spans = []
+                        for span_data in para_data.get('spans', []):
+                            font_info = FontInfo(**span_data['font'])
+                            span_obj = TextSpan(
+                                id=span_data['id'],
+                                text=span_data['text'],
+                                bbox=tuple(span_data['bbox']),
+                                font=font_info,
+                                translated_text=span_data.get('translated_text', ""),
+                                forces_line_break=span_data.get('forces_line_break', False)
+                            )
+                            para_spans.append(span_obj)
+                            all_spans_in_block.append(span_obj)
+                        
+                        if para_spans:
+                            block_obj.paragraphs.append(Paragraph(id=para_data['id'], spans=para_spans))
+                else:
+                    # Fallback pour d'anciennes structures de fichiers ou des blocs sans paragraphes.
+                    self.debug_logger.warning(f"  -> !! Aucun paragraphe trouvé pour le bloc {block_obj.id}. Reconstitution à partir de la liste de spans aplatie.")
+                    para_spans_fallback = []
+                    for span_data in block_data.get('spans', []):
+                        font_info = FontInfo(**span_data['font'])
+                        span_obj = TextSpan(
+                            id=span_data['id'],
+                            text=span_data['text'],
+                            bbox=tuple(span_data['bbox']),
+                            font=font_info
+                        )
+                        para_spans_fallback.append(span_obj)
+                        all_spans_in_block.append(span_obj)
                     
-                    if current_para_spans:
-                         block_obj.paragraphs.append(Paragraph(id=current_para_id, spans=current_para_spans))
+                    if para_spans_fallback:
+                        para_id_fallback = f"{block_obj.id}_P1"
+                        block_obj.paragraphs.append(Paragraph(id=para_id_fallback, spans=para_spans_fallback))
 
+                block_obj.spans = all_spans_in_block # La liste aplatie reste utile
                 page_obj.text_blocks.append(block_obj)
 
             pages.append(page_obj)
-        self.debug_logger.info(f"--- Fin de _load_dom_from_file ---")
+        self.debug_logger.info(f"--- Fin de _load_dom_from_file (CORRIGÉ) ---")
         return pages
 
     def _open_session_folder(self):
