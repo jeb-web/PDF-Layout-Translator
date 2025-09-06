@@ -2,7 +2,7 @@
 # -*- coding: utf-8 -*-
 """
 PDF Layout Translator - Moteur de Rendu PDF
-*** VERSION FINALE - Jalon 2.10 (Réinitialisation du Curseur de Page) ***
+*** VERSION DE TEST - Jalon 2.11 (Test de Débordement de Page) ***
 """
 import logging
 from pathlib import Path
@@ -51,7 +51,7 @@ class PDFReconstructor:
         return font.text_length(text, fontsize=font_size)
 
     def render_pages(self, pages: List[PageObject], output_path: Path):
-        self.debug_logger.info("--- DÉMARRAGE PDFRECONSTRUCTOR (Jalon 2.10 - Finale) ---")
+        self.debug_logger.info("--- DÉMARRAGE PDFRECONSTRUCTOR (Jalon 2.11 - Test de Débordement) ---")
         doc = fitz.open()
         self.font_cache.clear()
 
@@ -71,7 +71,6 @@ class PDFReconstructor:
             
             sorted_blocks = sorted(page_data.text_blocks, key=lambda b: (b.bbox[1], b.bbox[0]))
             
-            # --- CORRECTION FINALE: Réinitialisation du curseur pour CHAQUE page ---
             page_y_cursor = sorted_blocks[0].bbox[1] if sorted_blocks else 0
             self.debug_logger.info(f"  Curseur vertical initialisé à y={page_y_cursor:.2f} pour la Page {page_data.page_number}")
 
@@ -82,6 +81,13 @@ class PDFReconstructor:
                 original_y = block.bbox[1]
                 block_start_y = max(original_y, page_y_cursor)
                 
+                # --- GARDE DE SÉCURITÉ POUR VALIDATION ---
+                if block_start_y > page.rect.height:
+                    self.debug_logger.error(f"!! DÉBORDEMENT DE PAGE DÉTECTÉ pour le bloc {block.id}.")
+                    self.debug_logger.error(f"   La position de départ calculée ({block_start_y:.2f}) dépasse la hauteur de la page ({page.rect.height:.2f}).")
+                    self.debug_logger.error(f"   Arrêt du rendu pour la page {page_data.page_number} pour éviter la corruption.")
+                    break  # Arrête de dessiner les blocs sur cette page
+
                 block_width = block.final_bbox[2] - block.final_bbox[0]
                 start_x = block.final_bbox[0]
                 
@@ -94,7 +100,7 @@ class PDFReconstructor:
                     if not para.spans: continue
                     
                     if i > 0:
-                         y_pos_within_block += 5 # Marge entre les paragraphes
+                         y_pos_within_block += 5
 
                     lines = []
                     current_line_words = []
