@@ -26,7 +26,8 @@ from core.auto_translator import AutoTranslator, GOOGLETRANS_AVAILABLE
 from utils.font_manager import FontManager
 from core.layout_processor import LayoutProcessor
 from core.pdf_reconstructor import PDFReconstructor
-from core.data_model import PageObject, TextBlock, TextSpan, FontInfo
+# [JALON 2] Ajout des imports nécessaires
+from core.data_model import PageObject, TextBlock, TextSpan, FontInfo, Paragraph
 from gui.font_dialog import FontDialog
 
 class MainWindow:
@@ -288,40 +289,23 @@ class MainWindow:
         def thread_target():
             self._set_processing(True, "Lancement de la traduction automatique...")
             try:
-                self.debug_logger.info("--- Début du processus de Traduction Automatique ---")
-                
-                self.debug_logger.info("Étape 1/4: Chargement du DOM...")
+                self.debug_logger.info("Auto-Traduction: Étape 1/3 - Génération du XLIFF en mémoire...")
                 page_objects = self._load_dom_from_file(self.current_session_id, "1_dom_analysis.json")
-                
-                self.debug_logger.info("Étape 2/4: Génération du XLIFF source...")
                 xliff_content = self.text_extractor.create_xliff(page_objects, self.source_lang_var.get(), self.target_lang_var.get())
                 session_dir = self.session_manager.get_session_directory(self.current_session_id)
-                
-                self.debug_logger.info(" -> Écriture du fichier de débogage '2_xliff_to_translate.xliff'...")
                 with open(session_dir / "2_xliff_to_translate.xliff", "w", encoding="utf-8") as f: f.write(xliff_content)
-                self.debug_logger.info(" -> Fichier sauvegardé.")
-
-                self.debug_logger.info("Étape 3/4: Appel du service de traduction...")
+                self.debug_logger.info("Fichier de débogage '2_xliff_to_translate.xliff' sauvegardé.")
+                self.debug_logger.info("Auto-Traduction: Étape 2/3 - Envoi au service de traduction...")
                 translated_xliff = self.auto_translator.translate_xliff_content(xliff_content, self.target_lang_var.get())
-                self.debug_logger.info(f" -> Service de traduction terminé. Type de retour: {type(translated_xliff).__name__}.")
-
-                # BLINDAGE : Vérifier explicitement si le retour est None AVANT d'écrire
-                if translated_xliff is None:
-                    raise ValueError("Le module de traduction a retourné une valeur None inattendue.")
-
-                self.debug_logger.info(" -> Écriture du fichier de débogage '3_xliff_translated.xliff'...")
                 with open(session_dir / "3_xliff_translated.xliff", "w", encoding="utf-8") as f: f.write(translated_xliff)
-                self.debug_logger.info(" -> Fichier sauvegardé.")
-
-                self.debug_logger.info("Étape 4/4: Affichage du résultat dans l'interface.")
+                self.debug_logger.info("Fichier de débogage '3_xliff_translated.xliff' sauvegardé.")
+                self.debug_logger.info("Auto-Traduction: Étape 3/3 - Affichage du résultat.")
                 self.root.after(0, lambda: self.translation_input.delete('1.0', tk.END))
                 self.root.after(0, lambda: self.translation_input.insert('1.0', translated_xliff))
                 self.root.after(0, lambda: messagebox.showinfo("Succès", "Traduction automatique terminée et insérée dans le champ de texte."))
-                self.debug_logger.info("--- Processus de Traduction Automatique terminé avec succès. ---")
-
             except Exception as e:
                 self.logger.error(f"Erreur de traduction automatique: {e}", exc_info=True)
-                self.debug_logger.error(f"--- ERREUR FATALE pendant la traduction automatique ---", exc_info=True)
+                self.debug_logger.error(f"ERREUR FATALE pendant la traduction automatique: {e}")
                 self.root.after(0, lambda e=e: messagebox.showerror("Erreur de Traduction", str(e)))
             finally:
                 self._set_processing(False)
@@ -373,8 +357,9 @@ class MainWindow:
             finally:
                 self._set_processing(False)
         threading.Thread(target=thread_target, daemon=True).start()
-        
+
     def _prepare_render_version(self, pages: List[PageObject], translations: Dict[str, str]) -> List[PageObject]:
+        self.debug_logger.info("'Version à Rendre' créée (Jalon 2) : la traduction par paragraphe a été appliquée.")
         import copy
         render_pages = copy.deepcopy(pages)
         
@@ -404,7 +389,6 @@ class MainWindow:
                 # Mettre à jour la liste plate de spans pour les modules suivants
                 block.spans = [span for para in block.paragraphs for span in para.spans]
 
-        self.debug_logger.info("'Version à Rendre' créée (Jalon 2) : la traduction par paragraphe a été appliquée.")
         return render_pages
 
     def _export_pdf(self):
@@ -432,17 +416,40 @@ class MainWindow:
         session_dir = self.session_manager.get_session_directory(session_id)
         file_path = session_dir / filename
         with open(file_path, 'r', encoding='utf-8') as f: data = json.load(f)
+        
         pages = []
         for page_data in data:
-            page_obj = PageObject(**{k:v for k,v in page_data.items() if k not in ['text_blocks', 'image_blocks']})
-            if 'text_blocks' in page_data:
-                for block_data in page_data['text_blocks']:
-                    block_obj = TextBlock(**{k:v for k,v in block_data.items() if k != 'spans'})
-                    for span_data in block_data['spans']:
+            page_obj = PageObject(
+                page_number=page_data['page_number'],
+                dimensions=tuple(page_data['dimensions'])
+            )
+            
+            for block_data in page_data.get('text_blocks', []):
+                block_obj = TextBlock(
+                    id=block_data['id'],
+                    bbox=tuple(block_data['bbox']),
+                    alignment=block_data.get('alignment', 0)
+                )
+
+                for para_data in block_data.get('paragraphs', []):
+                    para_obj = Paragraph(id=para_data['id'])
+                    
+                    for span_data in para_data.get('spans', []):
                         font_info = FontInfo(**span_data['font'])
-                        span_obj = TextSpan(**{k:v for k,v in span_data.items() if k != 'font'}, font=font_info)
-                        block_obj.spans.append(span_obj)
-                    page_obj.text_blocks.append(block_obj)
+                        span_obj = TextSpan(
+                            id=span_data['id'],
+                            text=span_data['text'],
+                            bbox=tuple(span_data['bbox']),
+                            font=font_info
+                        )
+                        para_obj.spans.append(span_obj)
+                    
+                    block_obj.paragraphs.append(para_obj)
+                
+                block_obj.spans = [span for para in block_obj.paragraphs for span in para.spans]
+                
+                page_obj.text_blocks.append(block_obj)
+
             pages.append(page_obj)
         return pages
 
@@ -472,7 +479,3 @@ class ToolTip:
     def hide_tooltip(self, event):
         if self.tooltip_window: self.tooltip_window.destroy()
         self.tooltip_window = None
-
-
-
-
