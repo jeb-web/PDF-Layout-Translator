@@ -2,7 +2,7 @@
 # -*- coding: utf-8 -*-
 """
 PDF Layout Translator - Moteur de Rendu PDF
-*** VERSION CORRIGÉE - Jalon 2.3 (Reflow par Paragraphe) ***
+*** VERSION CORRIGÉE - Jalon 2.4 (Mesure de Largeur Unifiée) ***
 """
 import logging
 from pathlib import Path
@@ -41,7 +41,7 @@ class PDFReconstructor:
         return len(text) * font_size * 0.6
 
     def render_pages(self, pages: List[PageObject], output_path: Path):
-        self.debug_logger.info("--- DÉMARRAGE PDFRECONSTRUCTOR (Jalon 2.3 - Reflow par Paragraphe) ---")
+        self.debug_logger.info("--- DÉMARRAGE PDFRECONSTRUCTOR (Jalon 2.4 - Mesure Unifiée) ---")
         doc = fitz.open()
 
         for page_data in pages:
@@ -61,7 +61,6 @@ class PDFReconstructor:
                 if not block.final_bbox or not block.paragraphs:
                     continue
 
-                # Utiliser la position de départ du final_bbox, mais la largeur originale du bloc
                 start_x = block.final_bbox[0]
                 current_y = block.final_bbox[1]
                 block_width = block.bbox[2] - block.bbox[0]
@@ -72,21 +71,18 @@ class PDFReconstructor:
                 
                 max_font_size_in_line = 0
                 
-                # Itérer sur les paragraphes pour respecter la structure
                 for i, para in enumerate(block.paragraphs):
                     if not para.spans:
                         continue
                     
                     self.debug_logger.info(f"    -> Traitement du Paragraphe {para.id}")
 
-                    # Ajouter un espacement vertical avant le nouveau paragraphe (sauf le premier)
                     if i > 0 and max_font_size_in_line > 0:
                         current_y += max_font_size_in_line * 0.4 
 
                     current_x = start_x
                     max_font_size_in_line = para.spans[0].font.size
 
-                    # Créer la liste de mots pour ce paragraphe
                     para_words = []
                     for span in para.spans:
                         words = span.text.replace('\n', ' <PARA_BREAK> ').split(' ')
@@ -94,7 +90,6 @@ class PDFReconstructor:
                             if word:
                                 para_words.append((word, span))
                     
-                    # Rendu mot par mot du paragraphe
                     for word, span in para_words:
                         if span.font.size > max_font_size_in_line:
                             max_font_size_in_line = span.font.size
@@ -102,19 +97,23 @@ class PDFReconstructor:
                         if word == '<PARA_BREAK>':
                             current_y += max_font_size_in_line * 1.2
                             current_x = start_x
-                            max_font_size_in_line = span.font.size # Réinitialiser pour la nouvelle ligne
+                            max_font_size_in_line = span.font.size
                             continue
 
-                        word_width = self._get_text_width(word, span.font.name, span.font.size)
-                        space_width = self._get_text_width(' ', span.font.name, span.font.size)
-
-                        if current_x + word_width > start_x + block_width and current_x > start_x:
+                        # --- CORRECTION DE LA LOGIQUE DE MESURE ---
+                        # 1. Mesurer le mot AVEC son espace pour avancer le curseur.
+                        width_with_space = self._get_text_width(word + ' ', span.font.name, span.font.size)
+                        
+                        # 2. Mesurer le mot SANS espace pour le dessiner précisément.
+                        word_width_only = self._get_text_width(word, span.font.name, span.font.size)
+                        
+                        if current_x + width_with_space > start_x + block_width and current_x > start_x:
                             current_y += max_font_size_in_line * 1.2
                             current_x = start_x
-                            # La taille de la police pour la nouvelle ligne sera mise à jour par le mot actuel
                             max_font_size_in_line = span.font.size
 
-                        word_rect = fitz.Rect(current_x, current_y, current_x + word_width, current_y + max_font_size_in_line * 1.5)
+                        # 3. Utiliser la largeur du mot seul pour la boîte de dessin.
+                        word_rect = fitz.Rect(current_x, current_y, current_x + word_width_only, current_y + max_font_size_in_line * 1.5)
                         
                         self.debug_logger.info(f"      - Mot '{word}' dans {word_rect}")
                         
@@ -129,7 +128,8 @@ class PDFReconstructor:
                         if rc < 0 :
                              self.debug_logger.warning(f"        !! Le mot '{word}' a débordé de sa boîte de {abs(rc):.2f} unités.")
 
-                        current_x += word_width + space_width
+                        # 4. Avancer le curseur de la largeur incluant l'espace.
+                        current_x += width_with_space
                 
                 shape.commit()
 
