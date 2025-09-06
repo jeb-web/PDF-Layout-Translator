@@ -22,9 +22,7 @@ class TextSpan:
     font: FontInfo
     bbox: Tuple[float, float, float, float]
     translated_text: str = ""
-    # Le drapeau is_end_of_paragraph est maintenant géré par la structure ci-dessous.
 
-# [JALON 1] Nouvelle structure pour représenter un paragraphe sémantique.
 @dataclass
 class Paragraph:
     id: str
@@ -34,13 +32,11 @@ class Paragraph:
 class TextBlock:
     id: str
     bbox: Tuple[float, float, float, float]
-    # [JALON 1] Le TextBlock contient maintenant une liste de paragraphes.
     paragraphs: List[Paragraph] = field(default_factory=list)
-    # [JALON 1] Nous gardons temporairement la liste plate de spans pour la compatibilité
-    # avec les modules qui ne sont pas encore mis à jour.
-    spans: List[TextSpan] = field(default_factory=list)
-    alignment: int = 0  # L'alignement sera implémenté dans un jalon futur.
+    alignment: int = 0
     final_bbox: Tuple[float, float, float, float] = None
+    # La liste plate est remplie après la reconstruction pour les modules de rendu
+    spans: List[TextSpan] = field(default_factory=list, repr=False)
 
 @dataclass
 class PageObject:
