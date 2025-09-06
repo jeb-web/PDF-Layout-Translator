@@ -19,12 +19,16 @@ class PDFAnalyzer:
         return re.sub(r"^[A-Z]{6}\+", "", font_name)
 
     def analyze_pdf(self, pdf_path: Path) -> List[PageObject]:
-        self.logger.info(f"Début de l'analyse architecturale (Jalon 1) de {pdf_path}")
+        self.logger.info(f"Début de l'analyse architecturale (Jalon 1 Corrigé) de {pdf_path}")
         doc = fitz.open(pdf_path)
         pages = []
 
         for page_num, page in enumerate(doc):
-            page_obj = PageObject(page_number=page_num + 1, dimensions=page.rect.size)
+            # --- CORRECTION DE LA FAUTE DE FRAPPE ---
+            # L'objet Rect n'a pas d'attribut 'size', mais 'width' et 'height'.
+            page_dimensions = (page.rect.width, page.rect.height)
+            page_obj = PageObject(page_number=page_num + 1, dimensions=page_dimensions)
+            # ------------------------------------
             
             blocks_data = page.get_text("dict", flags=fitz.TEXTFLAGS_DICT)["blocks"]
             
@@ -50,10 +54,10 @@ class PDFAnalyzer:
                         font_info = FontInfo(
                             name=font_name, size=span_data['size'],
                             color=f"#{span_data['color']:06x}",
-                            is_bold="bold" in font_name.lower(),
+                            is_bold="bold" in font_name.lower() or "black" in font_name.lower(),
                             is_italic="italic" in font_name.lower()
                         )
-                        # Jointure intelligente: ajouter un espace si nécessaire
+                        
                         span_text = span_data['text']
                         if lines[line_key]['spans'] and span_data['bbox'][0] > (lines[line_key]['spans'][-1].bbox[2] + 1):
                             span_text = " " + span_text
@@ -76,19 +80,18 @@ class PDFAnalyzer:
                     is_last_line_of_block = (i == len(sorted_line_keys) - 1)
                     
                     if is_last_line_of_block:
-                        # Si c'est la dernière ligne du bloc, c'est forcément la fin d'un paragraphe
                         if current_paragraph_spans:
                             para_id = f"{block_id}_P{para_counter}"
                             text_block.paragraphs.append(Paragraph(id=para_id, spans=current_paragraph_spans))
                     else:
-                        # Mesurer l'espace avec la ligne suivante
                         current_line_bbox = lines[key]['bbox']
                         next_line_bbox = lines[sorted_line_keys[i+1]]['bbox']
                         
                         line_height = current_line_bbox[3] - current_line_bbox[1]
+                        if line_height <= 0: line_height = 10 # Fallback pour les lignes de hauteur nulle
+                        
                         vertical_gap = next_line_bbox[1] - current_line_bbox[3]
                         
-                        # Règle d'or: si l'espace est plus grand que 40% de la hauteur de ligne, c'est un nouveau paragraphe
                         if vertical_gap > line_height * 0.4:
                             if current_paragraph_spans:
                                 para_id = f"{block_id}_P{para_counter}"
@@ -96,7 +99,6 @@ class PDFAnalyzer:
                                 para_counter += 1
                                 current_paragraph_spans = []
                 
-                # Remplir la liste plate `spans` pour la compatibilité avec les anciens modules
                 text_block.spans = [span for para in text_block.paragraphs for span in para.spans]
 
                 if text_block.paragraphs:
