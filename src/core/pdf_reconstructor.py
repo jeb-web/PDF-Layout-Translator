@@ -2,7 +2,7 @@
 # -*- coding: utf-8 -*-
 """
 PDF Layout Translator - Moteur de Rendu PDF
-*** VERSION FINALE - CORRECTION DE LA RÉGRESSION DE MESURE ***
+*** VERSION FINALE ET COHÉRENTE ***
 """
 import logging
 from pathlib import Path
@@ -16,7 +16,7 @@ class PDFReconstructor:
         self.logger = logging.getLogger(__name__)
         self.debug_logger = logging.getLogger('debug_trace')
         self.font_manager = font_manager
-        # Cache pour les objets Font, essentiel pour la performance de la mesure
+        # Cache global pour les objets Font (pour la performance de la mesure)
         self.font_object_cache: Dict[Path, fitz.Font] = {}
 
     def _hex_to_rgb(self, hex_color: str) -> Tuple[float, float, float]:
@@ -32,13 +32,16 @@ class PDFReconstructor:
             return (0, 0, 0)
             
     def render_pages(self, pages: List[PageObject], output_path: Path):
-        self.debug_logger.info("--- Début du Rendu PDF (v2.1 Corrigé) ---")
+        self.debug_logger.info("--- Début du Rendu PDF (v3.0 - Architecture Unifiée) ---")
         doc = fitz.open()
         self.font_object_cache.clear()
         
         for page_data in pages:
             page = doc.new_page(width=page_data.dimensions[0], height=page_data.dimensions[1])
-            
+            # Dictionnaire de polices spécifique à CETTE page, pour éviter les bugs inter-pages
+            page_font_map: Dict[Path, str] = {}
+            font_counter = 0
+
             for block in page_data.text_blocks:
                 if not block.final_bbox or not block.spans: continue
                 
@@ -62,23 +65,29 @@ class PDFReconstructor:
                         self.logger.warning(f"Police non trouvée pour '{span.font.name}', rendu ignoré.")
                         continue
                     
-                    # --- CORRECTION DE LA RÉGRESSION ---
-                    # On utilise la méthode de mesure prouvée et fiable.
                     try:
+                        # 1. MESURE : On utilise un objet Font depuis le cache global
                         if font_path not in self.font_object_cache:
                             font_buffer = font_path.read_bytes()
                             self.font_object_cache[font_path] = fitz.Font(fontbuffer=font_buffer)
                         font_object = self.font_object_cache[font_path]
+
+                        # 2. DESSIN : On enregistre la police sur la page pour obtenir une référence SÛRE
+                        if font_path not in page_font_map:
+                            ref_name = f"F{font_counter}"
+                            page.insert_font(fontname=ref_name, fontbuffer=font_object.buffer)
+                            page_font_map[font_path] = ref_name
+                            font_counter += 1
+                        font_ref_name = page_font_map[font_path]
+
                     except Exception as e:
-                        self.logger.error(f"Impossible de charger la police {font_path} pour la mesure: {e}")
+                        self.logger.error(f"Impossible de préparer la police {font_path} : {e}")
                         continue
-                    # -----------------------------------
                     
                     words = span.text.strip().split(' ')
                     for i, word in enumerate(words):
                         word_to_draw = word + (' ' if i < len(words) - 1 else '')
                         
-                        # On utilise l'objet Font pour mesurer, pas la fonction globale.
                         word_width = font_object.text_length(word_to_draw, fontsize=span.font.size)
                         
                         if current_pos.x + word_width > block_bbox.x1 and current_pos.x > block_bbox.x0:
@@ -88,11 +97,11 @@ class PDFReconstructor:
                         
                         if current_pos.y > block_bbox.y1 + 5: break
 
-                        # Le dessin, lui, peut utiliser 'fontfile' directement.
+                        # 3. On utilise la référence sûre pour le dessin.
                         shape.insert_text(
                             current_pos,
                             word_to_draw,
-                            fontfile=str(font_path),
+                            fontname=font_ref_name, # La méthode la plus fiable
                             fontsize=span.font.size,
                             color=self._hex_to_rgb(span.font.color)
                         )
@@ -112,4 +121,4 @@ class PDFReconstructor:
 
         doc.save(output_path, garbage=4, deflate=True)
         doc.close()
-        self.debug_logger.info(f"--- Rendu PDF (v2.1 Corrigé) Terminé. ---")
+        self.debug_logger.info(f"--- Rendu PDF (v3.0 - Architecture Unifiée) Terminé. ---")
