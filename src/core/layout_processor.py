@@ -2,7 +2,7 @@
 # -*- coding: utf-8 -*-
 """
 PDF Layout Translator - Moteur de Mise en Page
-*** VERSION AVANCÉE - GESTION ADAPTATIVE DU LAYOUT ***
+*** VERSION FINALE - Jalon 3.0 (Stratégie de Préservation de Hauteur) ***
 """
 import logging
 from typing import List
@@ -36,21 +36,17 @@ class LayoutProcessor:
         return font.text_length(text, fontsize=font_size)
 
     def _calculate_text_height(self, block: TextBlock, width: float) -> float:
-        """Calcule la hauteur requise pour un bloc de texte avec une largeur donnée."""
-        if not block.spans:
+        if not block.spans or width <= 0:
             return 0
 
         all_words = []
         for span in block.spans:
             if span.text:
-                text_with_markers = span.text.replace('\n', ' <PARA_BREAK> ')
-                words = text_with_markers.split(' ')
+                words = span.text.replace('\n', ' <PARA_BREAK> ').split(' ')
                 for word in words:
-                    if word:
-                        all_words.append((word, span))
+                    if word: all_words.append((word, span))
         
-        if not all_words:
-            return 0
+        if not all_words: return 0
 
         current_x = 0
         max_font_size_in_line = all_words[0][1].font.size
@@ -65,7 +61,7 @@ class LayoutProcessor:
 
             word_width = self._get_text_width(word + ' ', span.font.name, span.font.size)
             
-            if current_x + word_width > width and current_x > 0:
+            if current_x > 0 and current_x + word_width > width:
                 current_x = 0
                 total_height += max_font_size_in_line * 1.2
                 max_font_size_in_line = span.font.size
@@ -78,56 +74,52 @@ class LayoutProcessor:
         return total_height
 
     def process_pages(self, pages: List[PageObject]) -> List[PageObject]:
-        self.debug_logger.info("--- DÉMARRAGE LAYOUTPROCESSOR (Adaptatif) ---")
+        self.debug_logger.info("--- DÉMARRAGE LAYOUTPROCESSOR (Stratégie de Préservation de Hauteur) ---")
         self._font_cache.clear()
 
         for page in pages:
             self.debug_logger.info(f"Traitement de la Page {page.page_number}")
-            # Trier les blocs par position pour une détection de collision fiable
             sorted_blocks = sorted(page.text_blocks, key=lambda b: (b.bbox[1], b.bbox[0]))
             
             for i, block in enumerate(sorted_blocks):
-                block.original_height = block.bbox[3] - block.bbox[1]
+                original_height = block.bbox[3] - block.bbox[1]
                 original_width = block.bbox[2] - block.bbox[0]
 
                 if original_width <= 0 or not block.spans:
                     block.final_bbox = block.bbox
                     continue
 
-                # Règle A : Vérifier si le texte tient dans les dimensions originales
+                # Règle A: Le texte tient-il dans la boîte d'origine ?
                 height_at_original_width = self._calculate_text_height(block, original_width)
                 
-                if height_at_original_width <= block.original_height:
+                if height_at_original_width <= original_height * 1.05: # Tolérance de 5%
                     self.debug_logger.info(f"  - Bloc {block.id}: CONSERVÉ. Le texte tient dans les dimensions originales.")
                     block.final_bbox = block.bbox
                     continue
 
-                # Règle B : Tenter d'élargir horizontalement
-                # (Logique simplifiée pour cette étape)
-                required_width = original_width * 1.20 # Augmentation arbitraire pour le test
+                # Règle B: Tenter d'élargir horizontalement
+                # Calcul de la largeur nécessaire par approximation
+                ratio = height_at_original_width / original_height
+                required_width = original_width * ratio 
                 
-                # Détection de collision
-                right_boundary = page.dimensions[0] # Bord droit de la page
+                right_boundary = page.dimensions[0] - 5 # Marge de sécurité
                 for other_block in sorted_blocks:
-                    if other_block.id != block.id:
-                        # Si l'autre bloc est à droite et potentiellement sur le chemin
-                        if other_block.bbox[0] > block.bbox[2]:
-                            # Collision verticale (simplifiée)
-                            if max(block.bbox[1], other_block.bbox[1]) < min(block.bbox[3], other_block.bbox[3]):
-                                right_boundary = min(right_boundary, other_block.bbox[0])
+                    if other_block.id != block.id and other_block.bbox[0] > block.bbox[0]:
+                        # Check for vertical overlap
+                        if max(block.bbox[1], other_block.bbox[1]) < min(block.bbox[3], other_block.bbox[3]):
+                            right_boundary = min(right_boundary, other_block.bbox[0] - 5) # Marge de sécurité
 
-                can_expand = (block.bbox[0] + required_width) < right_boundary
-
-                if can_expand:
-                    new_height_at_expanded_width = self._calculate_text_height(block, required_width)
-                    if new_height_at_expanded_width <= block.original_height:
+                if block.bbox[0] + required_width < right_boundary:
+                    height_at_new_width = self._calculate_text_height(block, required_width)
+                    if height_at_new_width <= original_height:
                         self.debug_logger.info(f"  - Bloc {block.id}: ÉLARGI. Nouvelle largeur: {required_width:.2f}")
                         block.final_bbox = (block.bbox[0], block.bbox[1], block.bbox[0] + required_width, block.bbox[3])
                         continue
 
-                # Règle E (Fallback) : Étendre verticalement
+                # Règle E (Fallback): Étendre verticalement
                 self.debug_logger.warning(f"  - Bloc {block.id}: ÉTENDU VERTICALEMENT. L'élargissement a échoué ou était insuffisant.")
                 new_height = self._calculate_text_height(block, original_width)
                 block.final_bbox = (block.bbox[0], block.bbox[1], block.bbox[2], block.bbox[1] + new_height)
+                block.is_vertically_extended = True
 
         return pages
