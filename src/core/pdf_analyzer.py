@@ -38,7 +38,8 @@ class PDFAnalyzer:
                 
                 span_counter = 0
                 for line in block.get('lines', []):
-                    for span in line.get('spans', []):
+                    spans_in_line = line.get('spans', [])
+                    for i, span in enumerate(spans_in_line):
                         span_counter += 1
                         span_id = f"{block_id}_S{span_counter}"
                         
@@ -52,7 +53,16 @@ class PDFAnalyzer:
 
                         font_info = FontInfo(name=font_name, size=span['size'], color=color_hex, is_bold=is_bold, is_italic=is_italic)
                         
-                        text_span = TextSpan(id=span_id, text=span['text'], font=font_info, bbox=span['bbox'])
+                        # --- MODIFICATION CLÉ : Détecter le dernier span de la ligne ---
+                        is_last_in_line = (i == len(spans_in_line) - 1)
+                        
+                        text_span = TextSpan(
+                            id=span_id, 
+                            text=span['text'], 
+                            font=font_info, 
+                            bbox=span['bbox'],
+                            is_last_in_line=is_last_in_line
+                        )
                         text_block.spans.append(text_span)
                 
                 if text_block.spans:
