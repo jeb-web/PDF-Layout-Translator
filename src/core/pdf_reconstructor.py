@@ -2,13 +2,13 @@
 # -*- coding: utf-8 -*-
 """
 PDF Layout Translator - Moteur de Rendu PDF
-*** VERSION FINALE ET COHÉRENTE ***
+*** VERSION DE DIAGNOSTIC - JALON 1.6 (Rollback + Traces) ***
+Revient à une méthode de rendu stable et l'instrumente pour analyse.
 """
 import logging
 from pathlib import Path
 from typing import List, Tuple, Dict
 import fitz
-import html
 from core.data_model import PageObject
 from utils.font_manager import FontManager
 
@@ -17,94 +17,94 @@ class PDFReconstructor:
         self.logger = logging.getLogger(__name__)
         self.debug_logger = logging.getLogger('debug_trace')
         self.font_manager = font_manager
-        self.style_to_class_map: Dict[tuple, str] = {}
-        self.font_archive_data: Dict[str, bytes] = {}
 
-    def _get_css_for_styles(self, pages: List[PageObject]) -> str:
-        """Génère une feuille de style CSS et prépare les données des polices."""
-        styles = {}
-        self.font_archive_data.clear()
-
-        for page in pages:
-            for block in page.text_blocks:
-                for span in block.spans:
-                    font_info = span.font
-                    style_key = (font_info.name, round(font_info.size, 2), font_info.color, font_info.is_bold, font_info.is_italic)
-                    
-                    if style_key not in styles:
-                        font_path = self.font_manager.get_replacement_font_path(font_info.name)
-                        if font_path and font_path.exists():
-                            font_name_in_css = font_info.name
-                            if font_name_in_css not in self.font_archive_data:
-                                try:
-                                    self.font_archive_data[font_name_in_css] = font_path.read_bytes()
-                                except Exception as e:
-                                    self.debug_logger.error(f"!! ERREUR LECTURE FICHIER POLICE {font_path}: {e}")
-                                    continue
-                            
-                            styles[style_key] = {
-                                'font-family': f"'{font_name_in_css}'",
-                                'font-size': f"{font_info.size}pt",
-                                'color': font_info.color, # Cette valeur est déjà une chaîne hexadécimale
-                                'font-weight': 'bold' if font_info.is_bold else 'normal',
-                                'font-style': 'italic' if font_info.is_italic else 'normal'
-                            }
-
-        css_string = ""
-        self.style_to_class_map.clear()
-        for i, (style_key, style_attrs) in enumerate(styles.items()):
-            class_name = f"style_{i}"
-            self.style_to_class_map[style_key] = class_name
-            css_string += f".{class_name} {{ "
-            for attr, value in style_attrs.items():
-                css_string += f"{attr}: {value}; "
-            css_string += "}\n"
-        
-        return css_string
-
-    def _get_class_for_span(self, span) -> str:
-        """Récupère le nom de la classe CSS pour un span donné."""
-        font_info = span.font
-        style_key = (font_info.name, round(font_info.size, 2), font_info.color, font_info.is_bold, font_info.is_italic)
-        return self.style_to_class_map.get(style_key, "")
+    def _hex_to_rgb(self, hex_color: str) -> Tuple[float, float, float]:
+        hex_color = hex_color.lstrip('#')
+        if len(hex_color) == 3:
+            hex_color = "".join([c * 2 for c in hex_color])
+        if len(hex_color) != 6:
+            return (0, 0, 0)
+        try:
+            r = int(hex_color[0:2], 16) / 255.0
+            g = int(hex_color[2:4], 16) / 255.0
+            b = int(hex_color[4:6], 16) / 255.0
+            return (r, g, b)
+        except ValueError:
+            return (0, 0, 0)
 
     def render_pages(self, pages: List[PageObject], output_path: Path):
-        self.debug_logger.info("--- DÉMARRAGE PDFRECONSTRUCTOR (Version finale) ---")
+        self.debug_logger.info("--- DÉMARRAGE PDFRECONSTRUCTOR (Rollback + Diagnostic Jalon 1.6) ---")
         doc = fitz.open()
 
-        default_css = self._get_css_for_styles(pages)
-
-        archive = fitz.Archive()
-        for font_name, font_data in self.font_archive_data.items():
-            archive.insert_file(arcname=font_name, buffer=font_data)
-
         for page_data in pages:
+            self.debug_logger.info(f"Traitement de la Page {page_data.page_number}")
             page = doc.new_page(width=page_data.dimensions[0], height=page_data.dimensions[1])
 
+            # --- TRACE POINT 1: Enregistrement des polices ---
+            self.debug_logger.info("  -> Étape 1: Identification et enregistrement des polices pour la page.")
+            fonts_on_page = {span.font.name for block in page_data.text_blocks for span in block.spans}
+            self.debug_logger.info(f"    - Polices uniques requises : {fonts_on_page}")
+            for font_name in fonts_on_page:
+                font_path = self.font_manager.get_replacement_font_path(font_name)
+                if font_path and font_path.exists():
+                    try:
+                        page.insert_font(fontname=font_name, fontfile=str(font_path))
+                        self.debug_logger.info(f"      - SUCCÈS : Police '{font_name}' enregistrée depuis '{font_path}'.")
+                    except Exception as e:
+                        self.debug_logger.error(f"      - ÉCHEC : Erreur d'enregistrement pour la police '{font_name}': {e}")
+                else:
+                    self.debug_logger.warning(f"      - ATTENTION : Chemin non trouvé pour la police '{font_name}'.")
+            self.debug_logger.info("  -> Fin de l'enregistrement des polices.")
+
             for block in page_data.text_blocks:
+                self.debug_logger.info(f"  > Traitement du TextBlock ID: {block.id}")
                 if not block.final_bbox or not block.spans:
+                    self.debug_logger.warning("    !! BLOC IGNORÉ : final_bbox manquant ou spans vides.")
                     continue
                 
                 rect = fitz.Rect(block.final_bbox)
                 if rect.is_empty:
+                    self.debug_logger.error("    !! BLOC IGNORÉ : Rectangle invalide.")
                     continue
-                
-                html_string = ""
-                for span in block.spans:
-                    class_name = self._get_class_for_span(span)
-                    escaped_text = html.escape(span.text).replace("\n", "<br/>")
-                    html_string += f'<span class="{class_name}">{escaped_text}</span>'
-                
-                alignment_style = ["left", "center", "right", "justify"][block.alignment]
-                html_string = f'<div style="text-align: {alignment_style}; margin:0; padding:0; line-height: 1.2;">{html_string}</div>'
-                
-                page.insert_htmlbox(
-                    rect,
-                    html_string,
-                    css=default_css,
-                    archive=archive
-                )
 
+                # Création d'un TextWriter pour calculer le reflow
+                writer = fitz.TextWriter(page.rect)
+                for span in block.spans:
+                    font = fitz.Font(fontname=span.font.name) # Utilise la police maintenant enregistrée
+                    writer.append((0,0), span.text, font=font, fontsize=span.font.size)
+                
+                # Simuler le rendu pour obtenir les lignes calculées
+                _, _, line_data = writer.fill_textbox(rect, text=None, align=block.alignment)
+
+                # Dessiner le texte ligne par ligne, span par span, avec les bons styles
+                shape = page.new_shape()
+                for line in line_data["lines"]:
+                    for span_info in line["spans"]:
+                        # --- TRACE POINT 2 & 3: Vérification des données avant rendu ---
+                        try:
+                            point = span_info["bbox"].bl
+                            text = span_info["text"]
+                            fontname = span_info["font"]
+                            fontsize = float(span_info["size"])
+                            color_hex = span_info["color"]
+                            color_rgb = self._hex_to_rgb(color_hex)
+                            
+                            self.debug_logger.info(f"    - Rendu du span : text='{text}', fontname='{fontname}', fontsize={fontsize}, color={color_rgb}")
+                            
+                            shape.insert_text(
+                                point,
+                                text,
+                                fontname=fontname,
+                                fontsize=fontsize,
+                                color=color_rgb
+                            )
+                        except Exception as e:
+                            self.debug_logger.error(f"    !! ERREUR lors de l'appel à shape.insert_text : {e}")
+                
+                shape.commit()
+                self.debug_logger.info(f"    -> Bloc {block.id} dessiné.")
+
+        self.debug_logger.info(f"Sauvegarde du PDF final vers : {output_path}")
         doc.save(output_path, garbage=4, deflate=True)
         doc.close()
-        self.debug_logger.info(f"--- PDF sauvegardé avec succès : {output_path} ---")
+        self.debug_logger.info("--- FIN PDFRECONSTRUCTOR ---")
