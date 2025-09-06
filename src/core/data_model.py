@@ -21,6 +21,8 @@ class TextSpan:
     text: str
     font: FontInfo
     bbox: Tuple[float, float, float, float]
+    # NOUVEAU CHAMP : Marqueur de fin de ligne pour préserver la structure des paragraphes.
+    is_last_in_line: bool = False
     translated_text: str = ""
 
 @dataclass
