@@ -367,10 +367,6 @@ class MainWindow:
     def _prepare_render_version(self, pages: List[PageObject], translations: Dict[str, str]) -> List[PageObject]:
         from lxml import etree
         
-        # On ne copie pas les pages pour garantir que nous modifions les objets originaux
-        # avec toutes leurs informations (bbox, etc.) intactes.
-        
-        # Étape 1: Créer une map de tous les spans du document pour un accès instantané par ID.
         span_map = {
             span.id: span 
             for page in pages 
@@ -379,18 +375,14 @@ class MainWindow:
             for span in para.spans
         }
 
-        # Étape 2: Vider le texte de tous les spans en préparation de la réinjection.
-        # Cela évite de garder du texte original si la traduction redistribue les mots.
         for span in span_map.values():
             span.text = ""
 
-        # Étape 3: Parcourir les traductions et réinjecter le texte.
         for para_id, translated_html in translations.items():
             if not translated_html or not translated_html.strip():
                 continue
 
             try:
-                # Nettoyer et parser le HTML traduit
                 if translated_html.strip().startswith('<![CDATA['):
                     translated_html = translated_html.strip()[9:-3]
                 
@@ -400,19 +392,15 @@ class MainWindow:
                 
                 if p_node is None: continue
 
-                # Réinjecter le texte traduit dans les spans originaux via la map
-                for node in p_node.iter(): # itérer sur tous les noeuds, y compris le texte de queue
+                for node in p_node.iter():
                     if node.tag == 'span':
                         span_id = node.get('id')
                         if span_id in span_map:
-                            # [LOGIQUE FINALE] On MODIFIE le span original.
-                            # On concatène le texte du noeud et sa "queue" (texte après la balise fermante)
                             span_map[span_id].text = (node.text or "") + (node.tail or "")
                         
             except Exception as e:
                 self.debug_logger.error(f"Erreur de reconstruction pour le paragraphe {para_id}: {e}")
 
-        # La structure 'pages' a été modifiée en place. On la retourne.
         return pages
 
     def _export_pdf(self):
@@ -439,6 +427,7 @@ class MainWindow:
     def _load_dom_from_file(self, session_id: str, filename: str) -> List[PageObject]:
         session_dir = self.session_manager.get_session_directory(session_id)
         file_path = session_dir / filename
+        self.debug_logger.info(f"--- Démarrage de _load_dom_from_file pour '{filename}' ---")
         with open(file_path, 'r', encoding='utf-8') as f: data = json.load(f)
         
         pages = []
@@ -446,9 +435,21 @@ class MainWindow:
             page_obj = PageObject(page_number=page_data['page_number'], dimensions=tuple(page_data['dimensions']))
             
             for block_data in page_data.get('text_blocks', []):
-                block_obj = TextBlock(id=block_data['id'], bbox=tuple(block_data['bbox']), alignment=block_data.get('alignment', 0))
-                
-                # Le 'spans' plat est maintenant la source de vérité pour le chargement
+                block_obj = TextBlock(
+                    id=block_data['id'], 
+                    bbox=tuple(block_data['bbox']), 
+                    alignment=block_data.get('alignment', 0)
+                )
+
+                # CORRECTION : Lire final_bbox depuis le fichier JSON
+                final_bbox_data = block_data.get('final_bbox')
+                if final_bbox_data:
+                    block_obj.final_bbox = tuple(final_bbox_data)
+                    self.debug_logger.info(f"  -> Lecture du bloc {block_obj.id} avec final_bbox: {block_obj.final_bbox}")
+                else:
+                    block_obj.final_bbox = None
+                    self.debug_logger.warning(f"  -> !! final_bbox non trouvé pour le bloc {block_obj.id} dans {filename}")
+
                 for span_data in block_data.get('spans', []):
                     font_info = FontInfo(**span_data['font'])
                     span_obj = TextSpan(
@@ -457,9 +458,8 @@ class MainWindow:
                         bbox=tuple(span_data['bbox']),
                         font=font_info
                     )
-                    block_obj.spans.append(span_obj) # Remplir la liste plate
+                    block_obj.spans.append(span_obj)
                 
-                # Reconstruire la structure en paragraphes à partir de la liste plate
                 if block_obj.spans:
                     para_id_prefix = block_obj.spans[0].id.rsplit('_S', 1)[0].replace('_L', '_P')
                     current_para_spans = []
@@ -468,8 +468,6 @@ class MainWindow:
 
                     for span in block_obj.spans:
                         current_para_spans.append(span)
-                        # On ne peut plus se fier aux flags du modèle, on assume un para par bloc pour l'instant
-                        # Ceci sera corrigé par la vraie analyse
                     
                     if current_para_spans:
                          block_obj.paragraphs.append(Paragraph(id=current_para_id, spans=current_para_spans))
@@ -477,6 +475,7 @@ class MainWindow:
                 page_obj.text_blocks.append(block_obj)
 
             pages.append(page_obj)
+        self.debug_logger.info(f"--- Fin de _load_dom_from_file ---")
         return pages
 
     def _open_session_folder(self):
@@ -504,5 +503,128 @@ class ToolTip:
         label.pack(ipadx=1)
     def hide_tooltip(self, event):
         if self.tooltip_window: self.tooltip_window.destroy()
-        self.tooltip_window = None
+        self.tooltip_window = None```
 
+### 2. Code Instrumenté pour `src/core/pdf_reconstructor.py`
+
+C'est le même code de diagnostic que précédemment. Je le fournis à nouveau pour que tout soit au même endroit.
+
+```python
+#!/usr/bin/env python3
+# -*- coding: utf-8 -*-
+"""
+PDF Layout Translator - Moteur de Rendu PDF
+*** VERSION DE DÉBOGAGE INSTRUMENTÉE - JALON 1.0 (DIAGNOSTIC) ***
+"""
+import logging
+from pathlib import Path
+from typing import List, Tuple, Dict
+import fitz
+from core.data_model import PageObject
+from utils.font_manager import FontManager
+
+class PDFReconstructor:
+    def __init__(self, font_manager: FontManager):
+        self.logger = logging.getLogger(__name__)
+        self.debug_logger = logging.getLogger('debug_trace')
+        self.font_manager = font_manager
+        self.font_object_cache: Dict[Path, fitz.Font] = {}
+
+    def _hex_to_rgb(self, hex_color: str) -> Tuple[float, float, float]:
+        hex_color = hex_color.lstrip('#')
+        if len(hex_color) == 3:
+            hex_color = "".join([c * 2 for c in hex_color])
+        if len(hex_color) != 6:
+            return (0, 0, 0)
+        try:
+            r = int(hex_color[0:2], 16) / 255.0
+            g = int(hex_color[2:4], 16) / 255.0
+            b = int(hex_color[4:6], 16) / 255.0
+            return (r, g, b)
+        except ValueError:
+            return (0, 0, 0)
+
+    def _get_font(self, font_name: str) -> fitz.Font:
+        self.debug_logger.info(f"        Font lookup for: '{font_name}'")
+        font_path = self.font_manager.get_replacement_font_path(font_name)
+        
+        if not (font_path and font_path.exists()):
+            self.debug_logger.error(f"        !! ÉCHEC: Police non trouvée ou chemin invalide pour '{font_name}'. Path: {font_path}")
+            return None
+        
+        self.debug_logger.info(f"        -> Chemin de police trouvé : {font_path}")
+
+        if font_path in self.font_object_cache:
+            self.debug_logger.info("        -> Police trouvée dans le cache.")
+            return self.font_object_cache[font_path]
+        
+        try:
+            self.debug_logger.info(f"        -> Tentative de chargement de la police depuis le fichier...")
+            font = fitz.Font(fontfile=str(font_path))
+            self.font_object_cache[font_path] = font
+            self.debug_logger.info("        -> Police chargée et mise en cache avec succès.")
+            return font
+        except Exception as e:
+            self.debug_logger.error(f"        !! ERREUR FATALE: Impossible de charger l'objet police depuis {font_path}: {e}")
+            return None
+
+    def render_pages(self, pages: List[PageObject], output_path: Path):
+        self.debug_logger.info("--- DÉMARRAGE PDFRECONSTRUCTOR (MODE DIAGNOSTIC) ---")
+        doc = fitz.open()
+        self.font_object_cache.clear()
+
+        if not pages:
+            self.debug_logger.warning("Aucune page à traiter. Le document sera vide.")
+        
+        for page_data in pages:
+            self.debug_logger.info(f"Traitement de la Page {page_data.page_number} / {len(pages)}")
+            page = doc.new_page(width=page_data.dimensions[0], height=page_data.dimensions[1])
+
+            if not page_data.text_blocks:
+                self.debug_logger.info("  -> Cette page ne contient aucun bloc de texte.")
+                continue
+
+            for block in page_data.text_blocks:
+                self.debug_logger.info(f"  > Traitement du TextBlock ID: {block.id}")
+
+                if not block.final_bbox or not block.spans:
+                    self.debug_logger.warning(f"    !! BLOC IGNORÉ : final_bbox manquant ou spans vides. final_bbox: {block.final_bbox}, Spans: {len(block.spans)}")
+                    continue
+                
+                rect = fitz.Rect(block.final_bbox)
+                if rect.is_empty or rect.width <= 0 or rect.height <= 0:
+                    self.debug_logger.error(f"    !! BLOC IGNORÉ : Le rectangle final_bbox est invalide ou de taille nulle. Coordonnées: {block.final_bbox}")
+                    continue
+
+                self.debug_logger.info(f"    - Rectangle de destination (final_bbox): {rect}")
+                writer = fitz.TextWriter(page.rect)
+                span_count = len(block.spans)
+
+                for i, span in enumerate(block.spans):
+                    self.debug_logger.info(f"      - Traitement du Span {i+1}/{span_count} (ID: {span.id}), Texte: '{span.text}'")
+                    
+                    font = self._get_font(span.font.name)
+                    if not font:
+                        self.debug_logger.error(f"      !! Police non chargée pour le span {span.id}. Ce fragment de texte sera ignoré.")
+                        continue
+                    
+                    writer.append(
+                        (0, 0),
+                        span.text,
+                        font=font,
+                        fontsize=span.font.size,
+                        color=self._hex_to_rgb(span.font.color)
+                    )
+                    self.debug_logger.info("      -> Span ajouté au buffer du TextWriter.")
+
+                if writer.buffer and writer.buffer.text.strip():
+                    self.debug_logger.info(f"    - Écriture du bloc {block.id} dans le PDF...")
+                    writer.fill_textbox(rect, align=block.alignment)
+                    self.debug_logger.info("    -> Écriture terminée.")
+                else:
+                    self.debug_logger.warning(f"    !! Le buffer du TextWriter est vide pour le bloc {block.id}. Rien à écrire.")
+
+        self.debug_logger.info(f"Sauvegarde du PDF final vers : {output_path}")
+        doc.save(output_path, garbage=4, deflate=True)
+        doc.close()
+        self.debug_logger.info("--- FIN PDFRECONSTRUCTOR ---")
