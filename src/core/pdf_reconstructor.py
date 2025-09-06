@@ -2,7 +2,7 @@
 # -*- coding: utf-8 -*-
 """
 PDF Layout Translator - Moteur de Rendu PDF
-*** VERSION FINALE - Jalon 2.9 (Logique Hybride) ***
+*** VERSION FINALE - Jalon 2.10 (Réinitialisation du Curseur de Page) ***
 """
 import logging
 from pathlib import Path
@@ -34,6 +34,7 @@ class PDFReconstructor:
         
         return fitz.Font()
 
+
     def _hex_to_rgb(self, hex_color: str) -> Tuple[float, float, float]:
         hex_color = hex_color.lstrip('#')
         if len(hex_color) == 3: hex_color = "".join([c * 2 for c in hex_color])
@@ -50,7 +51,7 @@ class PDFReconstructor:
         return font.text_length(text, fontsize=font_size)
 
     def render_pages(self, pages: List[PageObject], output_path: Path):
-        self.debug_logger.info("--- DÉMARRAGE PDFRECONSTRUCTOR (Jalon 2.9 - Hybride) ---")
+        self.debug_logger.info("--- DÉMARRAGE PDFRECONSTRUCTOR (Jalon 2.10 - Finale) ---")
         doc = fitz.open()
         self.font_cache.clear()
 
@@ -67,12 +68,12 @@ class PDFReconstructor:
                         page.insert_font(fontname=font_name, fontfile=str(font_path))
                     except Exception as e:
                         self.debug_logger.error(f"  -> ERREUR enregistrement police '{font_name}': {e}")
-
-            page_y_cursor = 0.0
+            
             sorted_blocks = sorted(page_data.text_blocks, key=lambda b: (b.bbox[1], b.bbox[0]))
-
-            if sorted_blocks:
-                page_y_cursor = sorted_blocks[0].bbox[1]
+            
+            # --- CORRECTION FINALE: Réinitialisation du curseur pour CHAQUE page ---
+            page_y_cursor = sorted_blocks[0].bbox[1] if sorted_blocks else 0
+            self.debug_logger.info(f"  Curseur vertical initialisé à y={page_y_cursor:.2f} pour la Page {page_data.page_number}")
 
             for block in sorted_blocks:
                 if not block.final_bbox or not block.paragraphs:
@@ -81,7 +82,6 @@ class PDFReconstructor:
                 original_y = block.bbox[1]
                 block_start_y = max(original_y, page_y_cursor)
                 
-                # La largeur de rendu est celle déterminée par le LayoutProcessor
                 block_width = block.final_bbox[2] - block.final_bbox[0]
                 start_x = block.final_bbox[0]
                 
@@ -92,6 +92,9 @@ class PDFReconstructor:
 
                 for i, para in enumerate(block.paragraphs):
                     if not para.spans: continue
+                    
+                    if i > 0:
+                         y_pos_within_block += 5 # Marge entre les paragraphes
 
                     lines = []
                     current_line_words = []
@@ -140,10 +143,9 @@ class PDFReconstructor:
                             word_ascender = font.ascender * span.font.size
                             y0 = y_baseline - word_ascender
 
-                            width_with_space = self._get_text_width(word + ' ', span.font.name, span.font.size)
                             word_width_only = self._get_text_width(word, span.font.name, span.font.size)
-
                             if word_width_only <= 0: continue
+                            width_with_space = self._get_text_width(word + ' ', span.font.name, span.font.size)
 
                             word_rect = fitz.Rect(current_x_draw, y0, current_x_draw + word_width_only, y0 + max_line_height)
                             
@@ -162,7 +164,6 @@ class PDFReconstructor:
 
                 shape.commit()
                 
-                # Mettre à jour le curseur plancher avec la position finale du bloc
                 page_y_cursor = y_pos_within_block
                 self.debug_logger.info(f"    Fin du bloc {block.id}. Curseur plancher mis à jour à y={page_y_cursor:.2f}")
 
