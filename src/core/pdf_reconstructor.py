@@ -2,7 +2,7 @@
 # -*- coding: utf-8 -*-
 """
 PDF Layout Translator - Moteur de Rendu PDF
-*** VERSION CORRIGÉE - Jalon 2.5 (Alignement par Ligne de Base) ***
+*** VERSION CORRIGÉE - Jalon 2.6 (Robustesse contre les mots vides) ***
 """
 import logging
 from pathlib import Path
@@ -53,18 +53,17 @@ class PDFReconstructor:
         return font.text_length(text, fontsize=font_size)
 
     def render_pages(self, pages: List[PageObject], output_path: Path):
-        self.debug_logger.info("--- DÉMARRAGE PDFRECONSTRUCTOR (Jalon 2.5 - Alignement par Ligne de Base) ---")
+        self.debug_logger.info("--- DÉMARRAGE PDFRECONSTRUCTOR (Jalon 2.6 - Robustesse) ---")
         doc = fitz.open()
-        self.font_cache.clear() # Vider le cache pour chaque nouveau document
+        self.font_cache.clear()
 
         for page_data in pages:
             self.debug_logger.info(f"Traitement de la Page {page_data.page_number}")
             page = doc.new_page(width=page_data.dimensions[0], height=page_data.dimensions[1])
 
-            # Pré-charger les polices nécessaires dans le cache et la page
             fonts_on_page = {span.font.name for block in page_data.text_blocks for span in block.spans}
             for font_name in fonts_on_page:
-                self._get_font(font_name) # Charge dans le cache
+                self._get_font(font_name)
                 font_path = self.font_manager.get_replacement_font_path(font_name)
                 if font_path and font_path.exists():
                     try:
@@ -84,20 +83,27 @@ class PDFReconstructor:
 
                 shape = page.new_shape()
                 
+                max_font_size_in_line = 0
+                
                 for i, para in enumerate(block.paragraphs):
                     if not para.spans:
                         continue
                     
                     self.debug_logger.info(f"    -> Traitement du Paragraphe {para.id}")
 
-                    # 1. PASSE 1: Organiser les mots en lignes
+                    if i > 0 and max_font_size_in_line > 0:
+                        current_y += max_font_size_in_line * 0.4 
+
                     lines = []
                     current_line = []
                     current_x_layout = start_x
                     para_words = []
                     for span in para.spans:
-                        words = span.text.split(' ')
+                        text_with_markers = span.text.replace('\n', ' <PARA_BREAK> ')
+                        words = text_with_markers.split(' ')
                         for word in words:
+                            # --- CORRECTIF DE ROBUSTESSE ---
+                            # S'assurer que le mot n'est ni vide, ni uniquement composé d'espaces.
                             if word:
                                 para_words.append((word, span))
 
@@ -114,12 +120,10 @@ class PDFReconstructor:
                     if current_line:
                         lines.append(current_line)
 
-                    # 2. PASSE 2: Dessiner chaque ligne avec un alignement par ligne de base
                     for line_words in lines:
                         max_ascender = 0
                         max_line_height = 0
 
-                        # Calculer les métriques de la ligne
                         for word, span in line_words:
                             font = self._get_font(span.font.name)
                             ascender = font.ascender * span.font.size
@@ -143,6 +147,10 @@ class PDFReconstructor:
                             width_with_space = self._get_text_width(word + ' ', span.font.name, span.font.size)
                             word_width_only = self._get_text_width(word, span.font.name, span.font.size)
 
+                            # Vérification finale pour éviter les rectangles vides
+                            if word_width_only <= 0:
+                                continue
+
                             word_rect = fitz.Rect(current_x_draw, y0, current_x_draw + word_width_only, y0 + max_line_height)
                             
                             self.debug_logger.info(f"        - Mot '{word}' dessiné dans {word_rect}")
@@ -157,9 +165,8 @@ class PDFReconstructor:
                             )
                             current_x_draw += width_with_space
                         
-                        # Avancer à la ligne suivante
-                        current_y += max_line_height * 1.2 # Facteur d'espacement de ligne
-
+                        current_y += max_line_height * 1.2
+                
                 shape.commit()
 
         self.debug_logger.info(f"Sauvegarde du PDF final vers : {output_path}")
