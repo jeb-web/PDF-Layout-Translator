@@ -2,8 +2,8 @@
 # -*- coding: utf-8 -*-
 """
 PDF Layout Translator - Moteur de Rendu PDF
-*** VERSION CORRIGÉE - JALON 1.4 (Implémentation API correcte) ***
-Utilise insert_htmlbox avec la méthode documentée pour la gestion des polices.
+*** VERSION FINALE - JALON 1.5 (API Documentée) ***
+Utilise page.insert_font() et page.insert_htmlbox() comme documenté.
 """
 import logging
 from pathlib import Path
@@ -19,13 +19,10 @@ class PDFReconstructor:
         self.debug_logger = logging.getLogger('debug_trace')
         self.font_manager = font_manager
         self.style_to_class_map: Dict[tuple, str] = {}
-        self.font_archive_data: Dict[str, bytes] = {}
 
     def _get_css_for_styles(self, pages: List[PageObject]) -> str:
-        """Génère une feuille de style CSS et prépare les données des polices."""
+        """Génère une feuille de style CSS à partir de tous les styles de police uniques."""
         styles = {}
-        self.font_archive_data.clear()
-
         for page in pages:
             for block in page.text_blocks:
                 for span in block.spans:
@@ -35,17 +32,8 @@ class PDFReconstructor:
                     if style_key not in styles:
                         font_path = self.font_manager.get_replacement_font_path(font_info.name)
                         if font_path and font_path.exists():
-                            font_name_in_css = font_info.name
-                            if font_name_in_css not in self.font_archive_data:
-                                try:
-                                    self.font_archive_data[font_name_in_css] = font_path.read_bytes()
-                                    self.debug_logger.info(f"Préparation de la police '{font_name_in_css}' pour l'archive.")
-                                except Exception as e:
-                                    self.debug_logger.error(f"!! ERREUR LECTURE FICHIER POLICE {font_path}: {e}")
-                                    continue
-                            
                             styles[style_key] = {
-                                'font-family': f"'{font_name_in_css}'",
+                                'font-family': f"'{font_info.name}'",
                                 'font-size': f"{font_info.size}pt",
                                 'color': font_info.color,
                                 'font-weight': 'bold' if font_info.is_bold else 'normal',
@@ -73,25 +61,33 @@ class PDFReconstructor:
         return self.style_to_class_map.get(style_key, "")
 
     def render_pages(self, pages: List[PageObject], output_path: Path):
-        self.debug_logger.info("--- DÉMARRAGE PDFRECONSTRUCTOR (Moteur HTML v1.4 - API Corrigée) ---")
+        self.debug_logger.info("--- DÉMARRAGE PDFRECONSTRUCTOR (Moteur HTML v1.5) ---")
         doc = fitz.open()
 
         default_css = self._get_css_for_styles(pages)
         self.debug_logger.info(f"CSS généré pour le document :\n{default_css}")
 
-        # CORRECTION FINALE : Utilisation de la méthode documentée `archive.insert_file()`
-        archive = fitz.Archive()
-        for font_name, font_data in self.font_archive_data.items():
-            try:
-                # La méthode correcte pour ajouter un fichier à l'archive
-                archive.insert_file(arcname=font_name, buffer=font_data)
-                self.debug_logger.info(f"Police '{font_name}' insérée dans l'archive.")
-            except Exception as e:
-                self.debug_logger.error(f"!! ERREUR lors de l'insertion de la police '{font_name}' dans l'archive : {e}")
-
         for page_data in pages:
             self.debug_logger.info(f"Traitement de la Page {page_data.page_number} / {len(pages)}")
             page = doc.new_page(width=page_data.dimensions[0], height=page_data.dimensions[1])
+
+            # Enregistrer toutes les polices nécessaires pour CETTE page
+            fonts_on_page = set()
+            for block in page_data.text_blocks:
+                for span in block.spans:
+                    fonts_on_page.add(span.font.name)
+            
+            for font_name in fonts_on_page:
+                font_path = self.font_manager.get_replacement_font_path(font_name)
+                if font_path and font_path.exists():
+                    try:
+                        # La méthode correcte pour enregistrer une police pour une page
+                        page.insert_font(fontname=font_name, fontfile=str(font_path))
+                        self.debug_logger.info(f"  -> Police '{font_name}' enregistrée pour la page {page_data.page_number}")
+                    except Exception as e:
+                        self.debug_logger.error(f"  !! ERREUR lors de l'enregistrement de la police '{font_name}': {e}")
+                else:
+                    self.debug_logger.warning(f"  !! Chemin de police non trouvé pour '{font_name}'")
 
             for block in page_data.text_blocks:
                 self.debug_logger.info(f"  > Traitement du TextBlock ID: {block.id}")
@@ -101,8 +97,8 @@ class PDFReconstructor:
                     continue
                 
                 rect = fitz.Rect(block.final_bbox)
-                if rect.is_empty or rect.width <= 0 or rect.height <= 0:
-                    self.debug_logger.error(f"    !! BLOC IGNORÉ : Rectangle invalide. Coordonnées: {block.final_bbox}")
+                if rect.is_empty:
+                    self.debug_logger.error(f"    !! BLOC IGNORÉ : Rectangle invalide.")
                     continue
                 
                 self.debug_logger.info(f"    - Rectangle de destination (final_bbox): {rect}")
@@ -118,13 +114,15 @@ class PDFReconstructor:
                 
                 self.debug_logger.info(f"    - HTML généré pour le bloc : {html_string[:250]}...")
 
-                res = page.insert_htmlbox(
-                    rect,
-                    html_string,
-                    css=default_css,
-                    archive=archive
-                )
-                self.debug_logger.info(f"    -> Rendu HTML terminé. Texte restant (non inséré) : {res:.2f} (plus c'est proche de 0, mieux c'est)")
+                try:
+                    res = page.insert_htmlbox(
+                        rect,
+                        html_string,
+                        css=default_css
+                    )
+                    self.debug_logger.info(f"    -> Rendu HTML terminé. Texte restant (non inséré) : {res:.2f}")
+                except Exception as e:
+                    self.debug_logger.error(f"    !! ERREUR sur insert_htmlbox pour le bloc {block.id}: {e}")
 
         self.debug_logger.info(f"Sauvegarde du PDF final vers : {output_path}")
         doc.save(output_path, garbage=4, deflate=True)
