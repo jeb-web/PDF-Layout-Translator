@@ -2,8 +2,8 @@
 # -*- coding: utf-8 -*-
 """
 PDF Layout Translator - Moteur de Rendu PDF
-*** VERSION CORRIGÉE - JALON 1.1 (Correction API) ***
-Utilise insert_textbox(html=True) pour le rendu multi-styles.
+*** VERSION CORRIGÉE - JALON 1.2 (Correction API Font) ***
+Utilise insert_textbox(html=True) et la bonne méthode d'enregistrement des polices.
 """
 import logging
 from pathlib import Path
@@ -18,7 +18,8 @@ class PDFReconstructor:
         self.logger = logging.getLogger(__name__)
         self.debug_logger = logging.getLogger('debug_trace')
         self.font_manager = font_manager
-        # NOTE : Le cache des polices n'est plus géré ici car insert_textbox le gère en interne.
+        self.style_to_class_map: Dict[tuple, str] = {}
+
 
     def _get_css_for_styles(self, pages: List[PageObject]) -> str:
         """Génère une feuille de style CSS à partir de tous les styles de police uniques."""
@@ -27,21 +28,18 @@ class PDFReconstructor:
             for block in page.text_blocks:
                 for span in block.spans:
                     font_info = span.font
-                    # Utiliser un identifiant stable pour chaque style unique
                     style_key = (font_info.name, round(font_info.size, 2), font_info.color, font_info.is_bold, font_info.is_italic)
                     if style_key not in styles:
                         styles[style_key] = {
-                            'name': font_info.name,
-                            'font-family': font_info.name,
+                            'font-family': f"'{font_info.name}'", # Mettre des guillemets pour les noms composés
                             'font-size': f"{font_info.size}pt",
                             'color': font_info.color,
                             'font-weight': 'bold' if font_info.is_bold else 'normal',
                             'font-style': 'italic' if font_info.is_italic else 'normal'
                         }
         
-        # Créer les classes CSS
         css_string = ""
-        self.style_to_class_map = {}
+        self.style_to_class_map.clear()
         for i, (style_key, style_attrs) in enumerate(styles.items()):
             class_name = f"style_{i}"
             self.style_to_class_map[style_key] = class_name
@@ -59,17 +57,8 @@ class PDFReconstructor:
         return self.style_to_class_map.get(style_key, "")
 
     def render_pages(self, pages: List[PageObject], output_path: Path):
-        self.debug_logger.info("--- DÉMARRAGE PDFRECONSTRUCTOR (Moteur HTML) ---")
+        self.debug_logger.info("--- DÉMARRAGE PDFRECONSTRUCTOR (Moteur HTML v1.2) ---")
         doc = fitz.open()
-
-        # Enregistrer toutes les polices nécessaires au document
-        for page in pages:
-            for block in page.text_blocks:
-                for span in block.spans:
-                    font_path = self.font_manager.get_replacement_font_path(span.font.name)
-                    if font_path and font_path.exists():
-                        # Cette étape est cruciale pour que PyMuPDF connaisse la police
-                        doc.add_font(fontname=span.font.name, fontfile=str(font_path))
 
         # Générer une feuille de style CSS unique pour tout le document
         default_css = self._get_css_for_styles(pages)
@@ -78,6 +67,25 @@ class PDFReconstructor:
         for page_data in pages:
             self.debug_logger.info(f"Traitement de la Page {page_data.page_number} / {len(pages)}")
             page = doc.new_page(width=page_data.dimensions[0], height=page_data.dimensions[1])
+
+            # CORRECTION : Enregistrer les polices nécessaires DANS LA PAGE
+            # C'est page.insert_font() et non doc.add_font()
+            fonts_on_page = set()
+            for block in page_data.text_blocks:
+                for span in block.spans:
+                    fonts_on_page.add(span.font.name)
+            
+            for font_name in fonts_on_page:
+                font_path = self.font_manager.get_replacement_font_path(font_name)
+                if font_path and font_path.exists():
+                    try:
+                        page.insert_font(fontname=font_name, fontfile=str(font_path))
+                        self.debug_logger.info(f"  -> Police '{font_name}' enregistrée pour la page {page_data.page_number}")
+                    except Exception as e:
+                        self.debug_logger.error(f"  !! ERREUR lors de l'enregistrement de la police '{font_name}': {e}")
+                else:
+                    self.debug_logger.warning(f"  !! Police non trouvée pour l'enregistrement sur la page : {font_name}")
+
 
             for block in page_data.text_blocks:
                 self.debug_logger.info(f"  > Traitement du TextBlock ID: {block.id}")
@@ -93,22 +101,17 @@ class PDFReconstructor:
                 
                 self.debug_logger.info(f"    - Rectangle de destination (final_bbox): {rect}")
 
-                # NOUVELLE LOGIQUE : Construire une chaîne HTML à partir des spans
                 html_string = ""
                 for span in block.spans:
                     class_name = self._get_class_for_span(span)
-                    # Échapper le texte pour éviter les problèmes avec des caractères comme < > &
-                    escaped_text = html.escape(span.text)
+                    escaped_text = html.escape(span.text).replace("\n", "<br/>") # Gérer les sauts de ligne
                     html_string += f'<span class="{class_name}">{escaped_text}</span>'
                 
-                # Encapsuler dans une balise de paragraphe pour que l'alignement fonctionne
-                # L'alignement CSS est plus fiable
                 alignment_style = ["left", "center", "right", "justify"][block.alignment]
-                html_string = f'<p style="text-align: {alignment_style}; margin:0; padding:0;">{html_string}</p>'
+                html_string = f'<p style="text-align: {alignment_style}; margin:0; padding:0; line-height: 1.2;">{html_string}</p>'
                 
-                self.debug_logger.info(f"    - HTML généré pour le bloc : {html_string[:200]}...")
+                self.debug_logger.info(f"    - HTML généré pour le bloc : {html_string[:250]}...")
 
-                # Utiliser insert_textbox avec l'option html=True
                 res = page.insert_textbox(
                     rect,
                     html_string,
