@@ -188,19 +188,15 @@ class PDFReconstructor:
             default_font = original_spans[0].font if original_spans else None
             return [(html_content, default_font)]
 
-    def render_pages(self, pages: List[PageObject], output_path: Path):
-        """Rendu principal des pages avec algorithme avancé"""
-        self.debug_logger.info("--- DÉMARRAGE PDFRECONSTRUCTOR (Version Corrigée) ---")
+    def render_pages_fixed_v1(self, pages: List[PageObject], output_path: Path):
+        """Version utilisant les bbox originales au lieu des final_bbox"""
+        self.debug_logger.info("--- PDFRECONSTRUCTOR CORRIGÉ V1 ---")
         doc = fitz.open()
-
-        # Charger les traductions si disponibles
-        paragraph_translations = self._load_translations_if_available(output_path)
-
+    
         for page_data in pages:
-            self.debug_logger.info(f"Traitement de la Page {page_data.page_number}")
             page = doc.new_page(width=page_data.dimensions[0], height=page_data.dimensions[1])
-
-            # Enregistrer les polices nécessaires
+            
+            # Enregistrer les polices
             fonts_on_page = {span.font.name for block in page_data.text_blocks for span in block.spans}
             for font_name in fonts_on_page:
                 font_path = self.font_manager.get_replacement_font_path(font_name)
@@ -208,16 +204,57 @@ class PDFReconstructor:
                     try:
                         page.insert_font(fontname=font_name, fontfile=str(font_path))
                     except Exception as e:
-                        self.debug_logger.error(f"  -> ERREUR enregistrement police '{font_name}': {e}")
-
-            # Rendu avancé de chaque bloc
+                        self.debug_logger.error(f"Erreur police '{font_name}': {e}")
+    
             for block in page_data.text_blocks:
-                self._render_text_block_advanced(page, block, paragraph_translations)
-
-        self.debug_logger.info(f"Sauvegarde du PDF final vers : {output_path}")
+                if not block.spans:
+                    continue
+                    
+                # UTILISER LA BBOX ORIGINALE au lieu de final_bbox
+                target_rect = block.bbox  # <-- CHANGEMENT ICI
+                
+                # Construire le texte complet du bloc
+                full_text = " ".join(span.text for span in block.spans if span.text.strip())
+                
+                if not full_text.strip():
+                    continue
+                    
+                # Prendre la police du premier span
+                first_span = block.spans[0]
+                font_name = first_span.font.name
+                font_size = first_span.font.size
+                color_rgb = self._hex_to_rgb(first_span.font.color)
+                
+                # Créer le rectangle PyMuPDF
+                rect = fitz.Rect(target_rect[0], target_rect[1], target_rect[2], target_rect[3])
+                
+                try:
+                    # Ajuster automatiquement la taille de police si nécessaire
+                    current_size = font_size
+                    while current_size > 4:  # Minimum acceptable
+                        rc = page.insert_textbox(
+                            rect,
+                            full_text,
+                            fontname=font_name,
+                            fontsize=current_size,
+                            color=color_rgb,
+                            align=block.alignment
+                        )
+                        
+                        if rc >= 0:  # Succès
+                            self.debug_logger.info(f"Texte inséré: '{full_text[:30]}...' avec police {current_size}")
+                            break
+                        else:
+                            current_size -= 0.5  # Réduire la taille
+                            
+                    if current_size <= 4:
+                        self.debug_logger.warning(f"Impossible d'insérer: '{full_text[:30]}...'")
+                        
+                except Exception as e:
+                    self.debug_logger.error(f"Erreur insertion: {e}")
+    
         doc.save(output_path, garbage=4, deflate=True)
         doc.close()
-        self.debug_logger.info("--- FIN PDFRECONSTRUCTOR ---")
 
     def _load_translations_if_available(self, output_path: Path) -> Dict[str, str]:
         """Charge les traductions depuis le fichier de session si disponible"""
@@ -236,3 +273,4 @@ class PDFReconstructor:
             self.debug_logger.error(f"Impossible de charger les traductions: {e}")
         
         return {}
+
