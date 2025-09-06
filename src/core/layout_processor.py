@@ -2,7 +2,7 @@
 # -*- coding: utf-8 -*-
 """
 PDF Layout Translator - Moteur de Mise en Page
-*** VERSION AMÉLIORÉE - Calcul précis du reflow avec gestion des débordements ***
+*** VERSION FINALE - GESTION DES PARAGRAPHES ET STYLES ***
 """
 import logging
 from typing import List
@@ -17,7 +17,6 @@ class LayoutProcessor:
         self.font_manager = font_manager
 
     def _get_text_width(self, text: str, font_name: str, font_size: float) -> float:
-        """Calcule la largeur précise du texte"""
         font_path = self.font_manager.get_replacement_font_path(font_name)
         if font_path and font_path.exists():
             try:
@@ -28,107 +27,51 @@ class LayoutProcessor:
                 self.debug_logger.error(f"Erreur de mesure Fitz pour la police {font_path}: {e}")
         return len(text) * font_size * 0.6
 
-    def _calculate_text_height(self, text: str, font_name: str, font_size: float, available_width: float) -> float:
-        """Calcule la hauteur nécessaire pour un texte donné dans une largeur donnée"""
-        if not text.strip():
-            return font_size * 1.2
-        
-        words = text.split()
-        if not words:
-            return font_size * 1.2
-        
-        lines = []
-        current_line = ""
-        
-        for word in words:
-            test_line = current_line + (" " if current_line else "") + word
-            test_width = self._get_text_width(test_line, font_name, font_size)
-            
-            if test_width <= available_width or not current_line:
-                current_line = test_line
-            else:
-                if current_line:
-                    lines.append(current_line)
-                current_line = word
-        
-        if current_line:
-            lines.append(current_line)
-        
-        line_count = max(len(lines), 1)
-        return line_count * font_size * 1.3  # Interlignage de 1.3
-
-    def _process_paragraph_reflow(self, paragraph, available_width: float) -> float:
-        """Calcule la hauteur nécessaire pour un paragraphe avec reflow"""
-        total_height = 0
-        
-        # Concatener tout le texte du paragraphe pour un calcul global
-        full_text = ""
-        representative_font = None
-        
-        for span in paragraph.spans:
-            if span.text.strip():
-                full_text += span.text + " "
-                if representative_font is None:
-                    representative_font = span.font
-        
-        if not full_text.strip() or not representative_font:
-            return 15  # Hauteur minimale
-        
-        # Calculer la hauteur avec reflow
-        paragraph_height = self._calculate_text_height(
-            full_text.strip(), 
-            representative_font.name, 
-            representative_font.size, 
-            available_width * 0.95  # Marge de sécurité
-        )
-        
-        return paragraph_height
-
     def process_pages(self, pages: List[PageObject]) -> List[PageObject]:
-        """Traitement principal avec calcul de reflow amélioré"""
-        self.debug_logger.info("LayoutProcessor: Démarrage du calcul du reflow (Version Améliorée).")
-        
+        self.debug_logger.info("LayoutProcessor: Démarrage du calcul du reflow (Finale).")
         for page in pages:
             for block in page.text_blocks:
                 original_width = block.bbox[2] - block.bbox[0]
-                original_height = block.bbox[3] - block.bbox[1]
-                
-                if original_width <= 0 or not block.paragraphs:
+                if original_width <= 0 or not block.spans:
                     block.final_bbox = block.bbox
                     continue
 
-                self.debug_logger.info(f"  -> Traitement du bloc {block.id} (largeur: {original_width:.1f})")
+                all_words = []
+                for span in block.spans:
+                    if span.text:
+                        # Remplacer les sauts de ligne par un marqueur spécial
+                        text_with_markers = span.text.replace('\n', ' <PARA_BREAK> ')
+                        words = text_with_markers.split(' ')
+                        for i, word in enumerate(words):
+                            all_words.append((word, span))
                 
-                # Calculer la hauteur totale nécessaire
-                total_height = 0
-                
-                for i, paragraph in enumerate(block.paragraphs):
-                    paragraph_height = self._process_paragraph_reflow(paragraph, original_width)
-                    total_height += paragraph_height
-                    
-                    # Espacement entre paragraphes (sauf pour le dernier)
-                    if i < len(block.paragraphs) - 1:
-                        total_height += 8
-                
-                # Hauteur minimale et maximale
-                min_height = original_height * 0.8  # Peut réduire de 20%
-                max_height = original_height * 3.0  # Peut tripler au maximum
-                
-                final_height = max(min_height, min(total_height, max_height))
-                
-                # Si débordement important, signaler
-                if total_height > max_height:
-                    self.debug_logger.warning(f"  -> Débordement important pour {block.id}: "
-                                            f"nécessaire={total_height:.1f}, max={max_height:.1f}")
-                
-                # Définir la bbox finale
-                block.final_bbox = (
-                    block.bbox[0], 
-                    block.bbox[1], 
-                    block.bbox[2], 
-                    block.bbox[1] + final_height
-                )
-                
-                self.debug_logger.info(f"  -> Final bbox: {block.final_bbox} (hauteur: {final_height:.1f})")
+                if not all_words:
+                    block.final_bbox = block.bbox
+                    continue
 
+                current_x = 0
+                max_font_size_in_line = all_words[0][1].font.size
+                total_height = max_font_size_in_line * 1.2
+                
+                for word, span in all_words:
+                    if word == '<PARA_BREAK>':
+                        current_x = 0
+                        total_height += max_font_size_in_line * 1.2
+                        max_font_size_in_line = span.font.size
+                        continue
+
+                    word_width = self._get_text_width(word + ' ', span.font.name, span.font.size)
+                    
+                    if current_x + word_width > original_width and current_x > 0:
+                        current_x = 0
+                        total_height += max_font_size_in_line * 1.2
+                        max_font_size_in_line = span.font.size
+                    
+                    if span.font.size > max_font_size_in_line:
+                        max_font_size_in_line = span.font.size
+
+                    current_x += word_width
+                
+                new_height = total_height
+                block.final_bbox = (block.bbox[0], block.bbox[1], block.bbox[2], block.bbox[1] + new_height)
         return pages
