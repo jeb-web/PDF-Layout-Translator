@@ -2,7 +2,7 @@
 # -*- coding: utf-8 -*-
 """
 PDF Layout Translator - Moteur de Rendu PDF
-*** VERSION FINALE - Jalon 2.7 (Gestion Correcte de la Position Verticale) ***
+*** VERSION FINALE - Jalon 2.8 (Positionnement Inter-Bloc) ***
 """
 import logging
 from pathlib import Path
@@ -52,7 +52,7 @@ class PDFReconstructor:
         return font.text_length(text, fontsize=font_size)
 
     def render_pages(self, pages: List[PageObject], output_path: Path):
-        self.debug_logger.info("--- DÉMARRAGE PDFRECONSTRUCTOR (Jalon 2.7 - Finale) ---")
+        self.debug_logger.info("--- DÉMARRAGE PDFRECONSTRUCTOR (Jalon 2.8 - Finale) ---")
         doc = fitz.open()
         self.font_cache.clear()
 
@@ -70,25 +70,29 @@ class PDFReconstructor:
                     except Exception as e:
                         self.debug_logger.error(f"  -> ERREUR enregistrement police '{font_name}': {e}")
 
+            # --- CORRECTION MAJEURE: Curseur vertical pour la page entière ---
+            page_y_cursor = page_data.text_blocks[0].final_bbox[1] if page_data.text_blocks else 0
+
             for block in page_data.text_blocks:
                 if not block.final_bbox or not block.paragraphs:
                     continue
 
                 start_x = block.final_bbox[0]
-                current_y = block.final_bbox[1]
+                block_start_y = page_y_cursor
                 block_width = block.bbox[2] - block.bbox[0]
                 
-                self.debug_logger.info(f"  > Rendu du bloc {block.id} (Largeur: {block_width:.2f}) à y={current_y:.2f}")
+                self.debug_logger.info(f"  > Rendu du bloc {block.id} (Largeur: {block_width:.2f}) à y={block_start_y:.2f}")
 
                 shape = page.new_shape()
                 
+                y_pos_within_block = block_start_y
+
                 for i, para in enumerate(block.paragraphs):
                     if not para.spans:
                         continue
                     
                     self.debug_logger.info(f"    -> Traitement du Paragraphe {para.id}")
 
-                    # PASSE 1: Organiser les mots en lignes
                     lines = []
                     current_line_words = []
                     current_x_layout = start_x
@@ -115,8 +119,7 @@ class PDFReconstructor:
                     if current_line_words:
                         lines.append(current_line_words)
 
-                    # PASSE 2: Dessiner chaque ligne avec un alignement par ligne de base
-                    y_line_start = current_y # Position de départ pour la première ligne de CE paragraphe
+                    y_line_start = y_pos_within_block
 
                     for line_words in lines:
                         max_ascender = 0
@@ -134,7 +137,6 @@ class PDFReconstructor:
                         if not max_line_height: continue
 
                         y_baseline = y_line_start + max_ascender
-                        self.debug_logger.info(f"      Ligne à y={y_line_start:.2f}, Baseline calculée à y={y_baseline:.2f}, Hauteur de ligne: {max_line_height:.2f}")
                         
                         current_x_draw = start_x
                         for word, span in line_words:
@@ -158,13 +160,16 @@ class PDFReconstructor:
                             )
                             current_x_draw += width_with_space
                         
-                        # Mettre à jour la position pour la prochaine ligne DANS ce paragraphe
                         y_line_start += max_line_height * 1.2
                     
-                    # Mettre à jour la position verticale principale pour le PROCHAIN paragraphe
-                    current_y = y_line_start
-                
+                    y_pos_within_block = y_line_start
+
                 shape.commit()
+
+                # --- MISE À JOUR DU CURSEUR DE PAGE ---
+                page_y_cursor = y_pos_within_block
+                page_y_cursor += 5 # Marge verticale entre les blocs
+                self.debug_logger.info(f"    Fin du bloc {block.id}. Prochain bloc commencera à y={page_y_cursor:.2f}")
 
         self.debug_logger.info(f"Sauvegarde du PDF final vers : {output_path}")
         doc.save(output_path, garbage=4, deflate=True)
