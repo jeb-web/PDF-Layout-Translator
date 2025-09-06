@@ -2,7 +2,7 @@
 # -*- coding: utf-8 -*-
 """
 PDF Layout Translator - Moteur de Mise en Page
-*** VERSION 1.1 - GESTION DES PARAGRAPHES (\n) ***
+*** VERSION 2.1 - GESTION MULTI-STYLE ET PARAGRAPHES ***
 """
 import logging
 from typing import List
@@ -25,65 +25,57 @@ class LayoutProcessor:
                 return font.text_length(text, fontsize=font_size)
             except Exception as e:
                 self.debug_logger.error(f"Erreur de mesure Fitz pour la police {font_path}: {e}")
-        
-        # Fallback très simple si la mesure échoue
         return len(text) * font_size * 0.6
 
     def process_pages(self, pages: List[PageObject]) -> List[PageObject]:
-        self.debug_logger.info("="*50)
-        self.debug_logger.info(" DÉBUT DU CALCUL DE REFLOW (v1.1 - Mode Paragraphe) ")
-        self.debug_logger.info("="*50)
-
+        self.debug_logger.info("LayoutProcessor: Démarrage du calcul du reflow (v2.1).")
         for page in pages:
             for block in page.text_blocks:
                 original_width = block.bbox[2] - block.bbox[0]
-                
                 if original_width <= 0 or not block.spans:
                     block.final_bbox = block.bbox
-                    self.debug_logger.info(f"  - Bloc {block.id}: Ignoré (largeur nulle ou pas de spans).")
                     continue
-                
-                # Le texte complet avec les \n se trouve dans le premier (et unique) span
-                full_text = block.spans[0].text
-                main_span = block.spans[0]
-                
-                # Diviser le texte en paragraphes basés sur les sauts de ligne
-                paragraphs = full_text.split('\n')
-                self.debug_logger.info(f"  - Bloc {block.id}: Calcul pour {len(paragraphs)} paragraphe(s).")
 
-                total_height = 0
-                for i, para_text in enumerate(paragraphs):
-                    if not para_text.strip():
-                        # Gérer les lignes vides : ajouter la hauteur d'une ligne standard.
-                        total_height += main_span.font.size * 1.2
-                        self.debug_logger.info(f"    -> Paragraphe {i+1} (vide): Hauteur ajoutée: {main_span.font.size * 1.2:.2f}pt.")
-                        continue
+                current_x = 0
+                current_y = 0
+                max_line_height = 0
+                
+                if block.spans:
+                    # Initialiser la hauteur avec la hauteur de la première ligne
+                    max_line_height = block.spans[0].font.size * 1.2
+                    current_y = max_line_height
 
-                    words = para_text.strip().split(' ')
-                    
-                    current_x = 0
-                    # La hauteur de ligne est déterminée par la police principale du bloc
-                    line_height = main_span.font.size * 1.2
-                    para_height = line_height
-                    
-                    for word in words:
-                        # On ajoute un espace pour la mesure, sauf pour le dernier mot
-                        word_to_measure = word + " "
-                        word_width = self._get_text_width(word_to_measure, main_span.font.name, main_span.font.size)
+                for span in block.spans:
+                    # La hauteur de ligne est dominée par la plus grande police sur la ligne
+                    if span.font.size * 1.2 > max_line_height:
+                        max_line_height = span.font.size * 1.2
+
+                    words = span.text.strip().split(' ')
+                    for i, word in enumerate(words):
+                        # Ajouter un espace après le mot, sauf si c'est le dernier mot du span
+                        word_to_draw = word + (' ' if i < len(words) - 1 else '')
+                        word_width = self._get_text_width(word_to_draw, span.font.name, span.font.size)
                         
                         if current_x + word_width > original_width and current_x > 0:
-                            # Saut de ligne "naturel"
+                            # Saut de ligne naturel
                             current_x = 0
-                            para_height += line_height
+                            current_y += max_line_height
+                            max_line_height = span.font.size * 1.2 # Réinitialiser pour la nouvelle ligne
                         
                         current_x += word_width
                     
-                    total_height += para_height
-                    self.debug_logger.info(f"    -> Paragraphe {i+1}: Hauteur calculée: {para_height:.2f}pt.")
-
-                new_height = total_height
+                    # Si le span est le dernier de sa ligne originale, forcer un saut de ligne
+                    if span.is_last_in_line:
+                        current_x = 0
+                        current_y += max_line_height
+                        if block.spans: # Eviter l'erreur si c'est le dernier span
+                            next_span_index = block.spans.index(span) + 1
+                            if next_span_index < len(block.spans):
+                                max_line_height = block.spans[next_span_index].font.size * 1.2
+                
+                new_height = current_y
                 block.final_bbox = (block.bbox[0], block.bbox[1], block.bbox[2], block.bbox[1] + new_height)
-                self.debug_logger.info(f"  - Bloc {block.id}: Nouvelle hauteur totale calculée: {new_height:.2f}pt.")
+                self.debug_logger.info(f"  - Bloc {block.id}: Nouvelle hauteur multi-style calculée: {new_height:.2f}pt.")
         
-        self.debug_logger.info("="*50); self.debug_logger.info(" FIN DU CALCUL DE REFLOW "); self.debug_logger.info("="*50)
+        self.debug_logger.info("LayoutProcessor: Calcul du reflow terminé.")
         return pages
