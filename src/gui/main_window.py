@@ -2,7 +2,7 @@
 # -*- coding: utf-8 -*-
 """
 PDF Layout Translator - Fenêtre principale
-*** VERSION FINALE CORRIGÉE (FLUX DE DONNÉES) ***
+*** VERSION STABLE v2.5.1-hotfix ***
 """
 
 import tkinter as tk
@@ -52,7 +52,7 @@ class MainWindow:
         self._initialize_managers()
         
     def _setup_window(self):
-        self.root.title("PDF Layout Translator v2.0.7")
+        self.root.title("PDF Layout Translator v2.5.1")
         self.root.geometry("1200x800")
         self.root.minsize(900, 700)
         style = ttk.Style()
@@ -343,16 +343,8 @@ class MainWindow:
                 with open(session_dir / "4_parsed_translations.json", "r", encoding="utf-8") as f:
                     translations = json.load(f)
                 
-                # --- TRACE 1 : VÉRIFICATION AVANT MODIFICATION ---
-                span_avant = page_objects[0].text_blocks[6].paragraphs[0].spans[1]
-                self.debug_logger.info(f"POINT DE CONTRÔLE 1 (AVANT prepare_render): Texte du span {span_avant.id} = '{span_avant.text}'")
-
                 self.debug_logger.info("Injection des traductions dans le DOM avant le layout...")
                 self._prepare_render_version(page_objects, translations)
-                
-                # --- TRACE 2 : VÉRIFICATION APRÈS MODIFICATION ---
-                span_apres = page_objects[0].text_blocks[6].paragraphs[0].spans[1]
-                self.debug_logger.info(f"POINT DE CONTRÔLE 2 (APRÈS prepare_render): Texte du span {span_apres.id} = '{span_apres.text}'")
                 
                 final_pages = self.layout_processor.process_pages(page_objects)
                 
@@ -373,19 +365,9 @@ class MainWindow:
         threading.Thread(target=thread_target, daemon=True).start()
 
     def _prepare_render_version(self, pages: List[PageObject], translations: Dict[str, str]) -> None:
-        """
-        Applique les traductions HTML aux objets TextSpan correspondants.
-        MODIFIE LES OBJETS 'pages' DIRECTEMENT EN MÉMOIRE.
-        """
-        self.debug_logger.info("--- Démarrage de _prepare_render_version (v3.1 - Modification directe) ---")
+        self.debug_logger.info("--- Démarrage de _prepare_render_version ---")
         
-        span_map = {
-            span.id: span 
-            for page in pages 
-            for block in page.text_blocks 
-            for para in block.paragraphs 
-            for span in para.spans
-        }
+        span_map = { span.id: span for page in pages for block in page.text_blocks for para in block.paragraphs for span in para.spans }
         self.debug_logger.info(f"  > {len(span_map)} spans au total trouvés dans le DOM.")
 
         for span in span_map.values():
@@ -430,17 +412,6 @@ class MainWindow:
             try:
                 final_pages = self._load_dom_from_file(self.current_session_id, "5_final_layout.json")
                 
-                # --- TRACE 4 : VÉRIFICATION AU DÉBUT DE L'EXPORT ---
-                self.debug_logger.info(f"    --- POINT DE CONTRÔLE 4 (DÉBUT DE L'EXPORT PDF) ---")
-                # On vérifie le même span qu'avant pour comparer
-                if final_pages and final_pages[0].text_blocks[6].spans:
-                    span_a_verifier = final_pages[0].text_blocks[6].spans[0]
-                    self.debug_logger.info(f"      > Vérification des données chargées depuis 5_final_layout.json")
-                    self.debug_logger.info(f"      > Exemple du premier span reçu par PDFReconstructor: id={span_a_verifier.id}, text='{span_a_verifier.text.strip()}', final_bbox={span_a_verifier.final_bbox}")
-                else:
-                    self.debug_logger.info("      > ATTENTION: Le bloc P1_B7 ne contient aucun span après chargement de 5_final_layout.json.")
-                self.debug_logger.info(f"    --- FIN DU POINT DE CONTRÔLE 4 ---")
-
                 session_info = self.session_manager.get_session_info(self.current_session_id)
                 original_pdf_path = Path(session_info.original_pdf_path)
                 output_path = original_pdf_path.parent / output_filename
@@ -458,7 +429,7 @@ class MainWindow:
     def _load_dom_from_file(self, session_id: str, filename: str) -> List[PageObject]:
         session_dir = self.session_manager.get_session_directory(session_id)
         file_path = session_dir / filename
-        self.debug_logger.info(f"--- Démarrage de _load_dom_from_file (v2) pour '{filename}' ---")
+        self.debug_logger.info(f"--- Démarrage de _load_dom_from_file (v2.2 Robuste) pour '{filename}' ---")
         with open(file_path, 'r', encoding='utf-8') as f:
             data = json.load(f)
 
@@ -470,21 +441,18 @@ class MainWindow:
                 block_obj = TextBlock(
                     id=block_data['id'],
                     bbox=tuple(block_data['bbox']),
-                    alignment=block_data.get('alignment', 0)
+                    alignment=block_data.get('alignment', 0),
+                    available_width=block_data.get('available_width', 0.0)
                 )
 
                 final_bbox_data = block_data.get('final_bbox')
                 if final_bbox_data:
                     block_obj.final_bbox = tuple(final_bbox_data)
 
-                # --- DÉBUT DE LA CORRECTION v2 ---
-                # Gère les deux formats de fichier : pré-mise en page (avec paragraphes) et post-mise en page (avec une liste de spans plate).
-                
-                # Cas 1 : Fichier post-mise en page (ex: 5_final_layout.json)
-                # Il a une liste 'spans' plate au niveau du bloc contenant les 'final_bbox'.
                 if 'spans' in block_data and any(s.get('final_bbox') for s in block_data['spans']):
                     self.debug_logger.info(f"  > Détection d'un format post-layout pour le bloc {block_obj.id}.")
                     for span_data in block_data['spans']:
+                        if not span_data.get('font'): continue # Sécurité
                         font_info = FontInfo(**span_data['font'])
                         span_obj = TextSpan(
                             id=span_data['id'],
@@ -497,11 +465,13 @@ class MainWindow:
                             span_obj.final_bbox = tuple(span_final_bbox_data)
                         block_obj.spans.append(span_obj)
                 
-                # Cas 2 : Fichier pré-mise en page (ex: 1_dom_analysis.json)
-                # Il a une structure hiérarchique de 'paragraphs' que nous devons parser.
                 elif 'paragraphs' in block_data and block_data['paragraphs']:
                     self.debug_logger.info(f"  > Détection d'un format pré-layout pour le bloc {block_obj.id}.")
                     for para_data in block_data['paragraphs']:
+                        if not para_data.get('spans'):
+                            self.debug_logger.warning(f"    - Paragraphe JSON vide ignoré dans le bloc {block_obj.id}")
+                            continue
+                            
                         para_obj = Paragraph(
                             id=para_data['id'],
                             is_list_item=para_data.get('is_list_item', False),
@@ -520,13 +490,13 @@ class MainWindow:
                         block_obj.paragraphs.append(para_obj)
                     
                     block_obj.spans = [span for para in block_obj.paragraphs for span in para.spans]
-                # --- FIN DE LA CORRECTION v2 ---
 
                 page_obj.text_blocks.append(block_obj)
 
             pages.append(page_obj)
-        self.debug_logger.info(f"--- Fin de _load_dom_from_file (corrigé v2) ---")
+        self.debug_logger.info(f"--- Fin de _load_dom_from_file (corrigé v2.2) ---")
         return pages
+
 
     def _open_session_folder(self):
         if self.current_session_id:
@@ -554,7 +524,3 @@ class ToolTip:
     def hide_tooltip(self, event):
         if self.tooltip_window: self.tooltip_window.destroy()
         self.tooltip_window = None
-
-
-
-
