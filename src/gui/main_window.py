@@ -431,8 +431,6 @@ class MainWindow:
                 self._set_processing(False)
         threading.Thread(target=thread_target, daemon=True).start()
 
-# Dans la classe MainWindow, modifiez la méthode _load_dom_from_file
-
     def _load_dom_from_file(self, session_id: str, filename: str) -> List[PageObject]:
         session_dir = self.session_manager.get_session_directory(session_id)
         file_path = session_dir / filename
@@ -454,29 +452,38 @@ class MainWindow:
                 if final_bbox_data:
                     block_obj.final_bbox = tuple(final_bbox_data)
                 
-                for span_data in block_data.get('spans', []):
-                    font_info = FontInfo(**span_data['font'])
-                    span_obj = TextSpan(
-                        id=span_data['id'],
-                        text=span_data['text'],
-                        bbox=tuple(span_data['bbox']),
-                        font=font_info
-                    )
-                    
-                    # <--- AJOUT : S'assurer que final_bbox est chargé s'il existe
-                    span_final_bbox_data = span_data.get('final_bbox')
-                    if span_final_bbox_data:
-                        span_obj.final_bbox = tuple(span_final_bbox_data)
-
-                    block_obj.spans.append(span_obj)
+                # --- CORRECTION MAJEURE : Reconstruire la hiérarchie Paragraphe -> Span ---
                 
-                # ... (le reste de la reconstruction de paragraphe reste identique)
-                # ... mais n'est plus critique pour le rendu final
+                # 1. Reconstruire les paragraphes et leurs spans
+                if 'paragraphs' in block_data and block_data['paragraphs']:
+                    for para_data in block_data['paragraphs']:
+                        para_obj = Paragraph(
+                            id=para_data['id'],
+                            is_list_item=para_data.get('is_list_item', False),
+                            list_marker_text=para_data.get('list_marker_text', ""),
+                            text_indent=para_data.get('text_indent', 0.0)
+                        )
+                        for span_data in para_data.get('spans', []):
+                            font_info = FontInfo(**span_data['font'])
+                            span_obj = TextSpan(
+                                id=span_data['id'],
+                                text=span_data['text'],
+                                bbox=tuple(span_data['bbox']),
+                                font=font_info
+                            )
+                            span_final_bbox_data = span_data.get('final_bbox')
+                            if span_final_bbox_data:
+                                span_obj.final_bbox = tuple(span_final_bbox_data)
+                            para_obj.spans.append(span_obj)
+                        block_obj.paragraphs.append(para_obj)
+                
+                # 2. Reconstruire la liste plate de spans pour la compatibilité
+                block_obj.spans = [span for para in block_obj.paragraphs for span in para.spans]
 
                 page_obj.text_blocks.append(block_obj)
 
             pages.append(page_obj)
-        self.debug_logger.info(f"--- Fin de _load_dom_from_file ---")
+        self.debug_logger.info(f"--- Fin de _load_dom_from_file (corrigé) ---")
         return pages
 
     def _open_session_folder(self):
@@ -505,5 +512,6 @@ class ToolTip:
     def hide_tooltip(self, event):
         if self.tooltip_window: self.tooltip_window.destroy()
         self.tooltip_window = None
+
 
 
