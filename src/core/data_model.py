@@ -23,13 +23,16 @@ class TextSpan:
     bbox: Tuple[float, float, float, float]
     translated_text: str = ""
     forces_line_break: bool = False
-    # <--- MODIFIÉ : Ajout de la BBox finale, calculée par le LayoutProcessor
     final_bbox: Optional[Tuple[float, float, float, float]] = None
 
 @dataclass
 class Paragraph:
     id: str
     spans: List[TextSpan] = field(default_factory=list)
+    # <--- AJOUTS : Champs pour gérer la mise en page des listes
+    is_list_item: bool = False
+    list_marker_text: str = ""  # Le texte de la puce (ex: "•", "1.", "A)")
+    text_indent: float = 0.0      # La position X de départ du texte après la puce
 
 @dataclass
 class TextBlock:
