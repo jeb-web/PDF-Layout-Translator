@@ -343,8 +343,16 @@ class MainWindow:
                 with open(session_dir / "4_parsed_translations.json", "r", encoding="utf-8") as f:
                     translations = json.load(f)
                 
+                # --- TRACE 1 : VÉRIFICATION AVANT MODIFICATION ---
+                span_avant = page_objects[0].text_blocks[6].paragraphs[0].spans[1]
+                self.debug_logger.info(f"POINT DE CONTRÔLE 1 (AVANT prepare_render): Texte du span {span_avant.id} = '{span_avant.text}'")
+
                 self.debug_logger.info("Injection des traductions dans le DOM avant le layout...")
                 self._prepare_render_version(page_objects, translations)
+                
+                # --- TRACE 2 : VÉRIFICATION APRÈS MODIFICATION ---
+                span_apres = page_objects[0].text_blocks[6].paragraphs[0].spans[1]
+                self.debug_logger.info(f"POINT DE CONTRÔLE 2 (APRÈS prepare_render): Texte du span {span_apres.id} = '{span_apres.text}'")
                 
                 final_pages = self.layout_processor.process_pages(page_objects)
                 
@@ -511,3 +519,4 @@ class ToolTip:
     def hide_tooltip(self, event):
         if self.tooltip_window: self.tooltip_window.destroy()
         self.tooltip_window = None
+
