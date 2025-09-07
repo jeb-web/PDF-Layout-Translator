@@ -458,7 +458,7 @@ class MainWindow:
     def _load_dom_from_file(self, session_id: str, filename: str) -> List[PageObject]:
         session_dir = self.session_manager.get_session_directory(session_id)
         file_path = session_dir / filename
-        self.debug_logger.info(f"--- Démarrage de _load_dom_from_file (v2) pour '{filename}' ---")
+        self.debug_logger.info(f"--- Démarrage de _load_dom_from_file (v2.1) pour '{filename}' ---")
         with open(file_path, 'r', encoding='utf-8') as f:
             data = json.load(f)
 
@@ -470,18 +470,15 @@ class MainWindow:
                 block_obj = TextBlock(
                     id=block_data['id'],
                     bbox=tuple(block_data['bbox']),
-                    alignment=block_data.get('alignment', 0)
+                    alignment=block_data.get('alignment', 0),
+                    # NOUVELLE LIGNE v2.2 : Charger la largeur disponible depuis le JSON.
+                    available_width=block_data.get('available_width', 0.0)
                 )
 
                 final_bbox_data = block_data.get('final_bbox')
                 if final_bbox_data:
                     block_obj.final_bbox = tuple(final_bbox_data)
 
-                # --- DÉBUT DE LA CORRECTION v2 ---
-                # Gère les deux formats de fichier : pré-mise en page (avec paragraphes) et post-mise en page (avec une liste de spans plate).
-                
-                # Cas 1 : Fichier post-mise en page (ex: 5_final_layout.json)
-                # Il a une liste 'spans' plate au niveau du bloc contenant les 'final_bbox'.
                 if 'spans' in block_data and any(s.get('final_bbox') for s in block_data['spans']):
                     self.debug_logger.info(f"  > Détection d'un format post-layout pour le bloc {block_obj.id}.")
                     for span_data in block_data['spans']:
@@ -497,8 +494,6 @@ class MainWindow:
                             span_obj.final_bbox = tuple(span_final_bbox_data)
                         block_obj.spans.append(span_obj)
                 
-                # Cas 2 : Fichier pré-mise en page (ex: 1_dom_analysis.json)
-                # Il a une structure hiérarchique de 'paragraphs' que nous devons parser.
                 elif 'paragraphs' in block_data and block_data['paragraphs']:
                     self.debug_logger.info(f"  > Détection d'un format pré-layout pour le bloc {block_obj.id}.")
                     for para_data in block_data['paragraphs']:
@@ -520,14 +515,13 @@ class MainWindow:
                         block_obj.paragraphs.append(para_obj)
                     
                     block_obj.spans = [span for para in block_obj.paragraphs for span in para.spans]
-                # --- FIN DE LA CORRECTION v2 ---
 
                 page_obj.text_blocks.append(block_obj)
 
             pages.append(page_obj)
-        self.debug_logger.info(f"--- Fin de _load_dom_from_file (corrigé v2) ---")
+        self.debug_logger.info(f"--- Fin de _load_dom_from_file (corrigé v2.1) ---")
         return pages
-
+        
     def _open_session_folder(self):
         if self.current_session_id:
             session_dir = self.session_manager.get_session_directory(self.current_session_id)
@@ -554,6 +548,7 @@ class ToolTip:
     def hide_tooltip(self, event):
         if self.tooltip_window: self.tooltip_window.destroy()
         self.tooltip_window = None
+
 
 
 
