@@ -2,7 +2,7 @@
 # -*- coding: utf-8 -*-
 """
 PDF Layout Translator - Analyseur de PDF
-*** VERSION FINALE ET STABILISÉE v1.9 - RÈGLES HEURISTIQUES AFFINÉES ***
+*** VERSION FINALE ET STABILISÉE v2.0 - LOGIQUE UNIFIÉE ***
 """
 import logging
 import re
@@ -22,7 +22,7 @@ class PDFAnalyzer:
 
     def _should_merge(self, block_a: TextBlock, block_b: TextBlock) -> Tuple[bool, str]:
         if not all([block_a.paragraphs, block_a.paragraphs[-1].spans, block_b.paragraphs, block_b.paragraphs[0].spans]):
-            return False, "Bloc ou paragraphe vide, fusion impossible"
+            return False, "Bloc ou paragraphe vide"
             
         last_span_a = block_a.paragraphs[-1].spans[-1]
         first_span_b = block_b.paragraphs[0].spans[0]
@@ -33,8 +33,8 @@ class PDFAnalyzer:
             return False, f"Écart vertical trop grand ({vertical_gap:.1f} >= {line_height_threshold:.1f})"
 
         horizontal_gap = abs(last_span_a.bbox[0] - first_span_b.bbox[0])
-        if horizontal_gap > 10:
-            return False, f"Désalignement horizontal significatif ({horizontal_gap:.1f} > 10)"
+        if horizontal_gap > 15: # Tolérance augmentée
+            return False, f"Désalignement horizontal ({horizontal_gap:.1f} > 15)"
 
         style_a = last_span_a.font
         style_b = first_span_b.font
@@ -67,7 +67,7 @@ class PDFAnalyzer:
         return unified_blocks
 
     def analyze_pdf(self, pdf_path: Path) -> List[PageObject]:
-        self.logger.info(f"Début de l'analyse architecturale (v1.9 - Heuristique Affinée) de {pdf_path}")
+        self.logger.info(f"Début de l'analyse architecturale (v2.0 - Logique Unifiée) de {pdf_path}")
         doc = fitz.open(pdf_path)
         pages = []
 
@@ -109,36 +109,29 @@ class PDFAnalyzer:
                     current_paragraph_spans.extend(line['spans'])
                     is_last_line_of_block = (i == len(sorted_lines) - 1)
                     
-                    # --- DÉBUT DE LA LOGIQUE HEURISTIQUE AFFINÉE (v1.9) ---
                     force_break = False
                     reason = ""
                     if not is_last_line_of_block:
                         next_line = sorted_lines[i+1]
                         if not next_line['spans']: continue
                         
-                        # Règle 1: Marqueurs de Liste (Raison forte)
+                        full_line_text = "".join(s.text for s in line['spans']).strip()
+                        line_height = line['bbox'][3] - line['bbox'][1]
+                        if line_height <= 0: line_height = 10 
+                        vertical_gap = next_line['bbox'][1] - line['bbox'][3]
+
                         next_starts_with_bullet = next_line['spans'][0].text.strip().startswith(('•', '-', '–'))
                         next_starts_with_number = re.match(r'^\s*\d+\.?', next_line['spans'][0].text.strip())
+
                         if next_starts_with_bullet or next_starts_with_number:
                             force_break = True
                             reason = "Nouvel item de liste"
-                        
-                        # Règle 2: Écart Vertical (Raison forte)
-                        if not force_break:
-                            line_height = line['bbox'][3] - line['bbox'][1]
-                            if line_height <= 0: line_height = 10 
-                            vertical_gap = next_line['bbox'][1] - line['bbox'][3]
-                            if vertical_gap > line_height * 0.45: # Seuil légèrement augmenté pour plus de certitude
-                                force_break = True
-                                reason = f"Écart vertical large ({vertical_gap:.1f})"
-
-                        # Règle 4: Ponctuation Finale (Raison forte)
-                        if not force_break:
-                            full_line_text = "".join(s.text for s in line['spans']).strip()
-                            if full_line_text.endswith(('.', '!', '?', ':')):
-                                force_break = True
-                                reason = "Ponctuation de fin de ligne"
-                    # --- FIN DE LA LOGIQUE HEURISTIQUE ---
+                        elif vertical_gap > line_height * 0.45:
+                            force_break = True
+                            reason = f"Écart vertical large"
+                        elif full_line_text.endswith(('.', '!', '?', ':')):
+                            force_break = True
+                            reason = "Ponctuation de fin de ligne"
                     
                     if is_last_line_of_block or force_break:
                         if current_paragraph_spans:
@@ -159,7 +152,7 @@ class PDFAnalyzer:
                                         new_span = copy.deepcopy(first_span)
                                         new_span.id = f"{first_span.id}_cont"
                                         new_span.text = content_text
-                                        marker_width_ratio = len(marker_text) / len(first_span.text) if len(first_span.text) > 0 else 0.5
+                                        marker_width_ratio = len(marker_text) / (len(marker_text) + len(content_text)) if (len(marker_text) + len(content_text)) > 0 else 0.5
                                         marker_width = (first_span.bbox[2] - first_span.bbox[0]) * marker_width_ratio
                                         new_bbox = list(first_span.bbox)
                                         new_bbox[0] = first_span.bbox[0] + marker_width
