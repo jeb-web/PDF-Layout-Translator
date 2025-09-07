@@ -458,28 +458,32 @@ class MainWindow:
     def _load_dom_from_file(self, session_id: str, filename: str) -> List[PageObject]:
         session_dir = self.session_manager.get_session_directory(session_id)
         file_path = session_dir / filename
-        self.debug_logger.info(f"--- Démarrage de _load_dom_from_file pour '{filename}' ---")
-        with open(file_path, 'r', encoding='utf-8') as f: data = json.load(f)
-        
+        self.debug_logger.info(f"--- Démarrage de _load_dom_from_file (v2) pour '{filename}' ---")
+        with open(file_path, 'r', encoding='utf-8') as f:
+            data = json.load(f)
+
         pages = []
         for page_data in data:
             page_obj = PageObject(page_number=page_data['page_number'], dimensions=tuple(page_data['dimensions']))
-            
+
             for block_data in page_data.get('text_blocks', []):
                 block_obj = TextBlock(
-                    id=block_data['id'], 
-                    bbox=tuple(block_data['bbox']), 
+                    id=block_data['id'],
+                    bbox=tuple(block_data['bbox']),
                     alignment=block_data.get('alignment', 0)
                 )
 
                 final_bbox_data = block_data.get('final_bbox')
                 if final_bbox_data:
                     block_obj.final_bbox = tuple(final_bbox_data)
+
+                # --- DÉBUT DE LA CORRECTION v2 ---
+                # Gère les deux formats de fichier : pré-mise en page (avec paragraphes) et post-mise en page (avec une liste de spans plate).
                 
-                # --- DÉBUT DE LA CORRECTION ---
-                # On ne lit plus les paragraphes, qui n'ont pas les coordonnées à jour.
-                # On lit directement la liste de spans du bloc, qui a été traitée par LayoutProcessor.
-                if 'spans' in block_data and block_data['spans']:
+                # Cas 1 : Fichier post-mise en page (ex: 5_final_layout.json)
+                # Il a une liste 'spans' plate au niveau du bloc contenant les 'final_bbox'.
+                if 'spans' in block_data and any(s.get('final_bbox') for s in block_data['spans']):
+                    self.debug_logger.info(f"  > Détection d'un format post-layout pour le bloc {block_obj.id}.")
                     for span_data in block_data['spans']:
                         font_info = FontInfo(**span_data['font'])
                         span_obj = TextSpan(
@@ -491,15 +495,37 @@ class MainWindow:
                         span_final_bbox_data = span_data.get('final_bbox')
                         if span_final_bbox_data:
                             span_obj.final_bbox = tuple(span_final_bbox_data)
-                        
-                        # On ajoute directement le span au bloc, qui est la structure attendue par PDFReconstructor.
                         block_obj.spans.append(span_obj)
-                # --- FIN DE LA CORRECTION ---
+                
+                # Cas 2 : Fichier pré-mise en page (ex: 1_dom_analysis.json)
+                # Il a une structure hiérarchique de 'paragraphs' que nous devons parser.
+                elif 'paragraphs' in block_data and block_data['paragraphs']:
+                    self.debug_logger.info(f"  > Détection d'un format pré-layout pour le bloc {block_obj.id}.")
+                    for para_data in block_data['paragraphs']:
+                        para_obj = Paragraph(
+                            id=para_data['id'],
+                            is_list_item=para_data.get('is_list_item', False),
+                            list_marker_text=para_data.get('list_marker_text', ""),
+                            text_indent=para_data.get('text_indent', 0.0)
+                        )
+                        for span_data in para_data.get('spans', []):
+                            font_info = FontInfo(**span_data['font'])
+                            span_obj = TextSpan(
+                                id=span_data['id'],
+                                text=span_data['text'],
+                                bbox=tuple(span_data['bbox']),
+                                font=font_info
+                            )
+                            para_obj.spans.append(span_obj)
+                        block_obj.paragraphs.append(para_obj)
+                    
+                    block_obj.spans = [span for para in block_obj.paragraphs for span in para.spans]
+                # --- FIN DE LA CORRECTION v2 ---
 
                 page_obj.text_blocks.append(block_obj)
 
             pages.append(page_obj)
-        self.debug_logger.info(f"--- Fin de _load_dom_from_file (corrigé) ---")
+        self.debug_logger.info(f"--- Fin de _load_dom_from_file (corrigé v2) ---")
         return pages
 
     def _open_session_folder(self):
@@ -528,6 +554,7 @@ class ToolTip:
     def hide_tooltip(self, event):
         if self.tooltip_window: self.tooltip_window.destroy()
         self.tooltip_window = None
+
 
 
 
