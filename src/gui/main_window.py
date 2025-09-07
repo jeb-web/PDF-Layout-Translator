@@ -429,6 +429,18 @@ class MainWindow:
             self._set_processing(True, "Génération du PDF final...")
             try:
                 final_pages = self._load_dom_from_file(self.current_session_id, "5_final_layout.json")
+                
+                # --- TRACE 4 : VÉRIFICATION AU DÉBUT DE L'EXPORT ---
+                self.debug_logger.info(f"    --- POINT DE CONTRÔLE 4 (DÉBUT DE L'EXPORT PDF) ---")
+                # On vérifie le même span qu'avant pour comparer
+                if final_pages and final_pages[0].text_blocks[6].spans:
+                    span_a_verifier = final_pages[0].text_blocks[6].spans[0]
+                    self.debug_logger.info(f"      > Vérification des données chargées depuis 5_final_layout.json")
+                    self.debug_logger.info(f"      > Exemple du premier span reçu par PDFReconstructor: id={span_a_verifier.id}, text='{span_a_verifier.text.strip()}', final_bbox={span_a_verifier.final_bbox}")
+                else:
+                    self.debug_logger.info("      > ATTENTION: Le bloc P1_B7 ne contient aucun span après chargement de 5_final_layout.json.")
+                self.debug_logger.info(f"    --- FIN DU POINT DE CONTRÔLE 4 ---")
+
                 session_info = self.session_manager.get_session_info(self.current_session_id)
                 original_pdf_path = Path(session_info.original_pdf_path)
                 output_path = original_pdf_path.parent / output_filename
@@ -519,4 +531,5 @@ class ToolTip:
     def hide_tooltip(self, event):
         if self.tooltip_window: self.tooltip_window.destroy()
         self.tooltip_window = None
+
 
