@@ -476,29 +476,26 @@ class MainWindow:
                 if final_bbox_data:
                     block_obj.final_bbox = tuple(final_bbox_data)
                 
-                if 'paragraphs' in block_data and block_data['paragraphs']:
-                    for para_data in block_data['paragraphs']:
-                        para_obj = Paragraph(
-                            id=para_data['id'],
-                            is_list_item=para_data.get('is_list_item', False),
-                            list_marker_text=para_data.get('list_marker_text', ""),
-                            text_indent=para_data.get('text_indent', 0.0)
+                # --- DÉBUT DE LA CORRECTION ---
+                # On ne lit plus les paragraphes, qui n'ont pas les coordonnées à jour.
+                # On lit directement la liste de spans du bloc, qui a été traitée par LayoutProcessor.
+                if 'spans' in block_data and block_data['spans']:
+                    for span_data in block_data['spans']:
+                        font_info = FontInfo(**span_data['font'])
+                        span_obj = TextSpan(
+                            id=span_data['id'],
+                            text=span_data['text'],
+                            bbox=tuple(span_data['bbox']),
+                            font=font_info
                         )
-                        for span_data in para_data.get('spans', []):
-                            font_info = FontInfo(**span_data['font'])
-                            span_obj = TextSpan(
-                                id=span_data['id'],
-                                text=span_data['text'],
-                                bbox=tuple(span_data['bbox']),
-                                font=font_info
-                            )
-                            span_final_bbox_data = span_data.get('final_bbox')
-                            if span_final_bbox_data:
-                                span_obj.final_bbox = tuple(span_final_bbox_data)
-                            para_obj.spans.append(span_obj)
-                        block_obj.paragraphs.append(para_obj)
-                
-                block_obj.spans = [span for para in block_obj.paragraphs for span in para.spans]
+                        span_final_bbox_data = span_data.get('final_bbox')
+                        if span_final_bbox_data:
+                            span_obj.final_bbox = tuple(span_final_bbox_data)
+                        
+                        # On ajoute directement le span au bloc, qui est la structure attendue par PDFReconstructor.
+                        block_obj.spans.append(span_obj)
+                # --- FIN DE LA CORRECTION ---
+
                 page_obj.text_blocks.append(block_obj)
 
             pages.append(page_obj)
@@ -531,5 +528,6 @@ class ToolTip:
     def hide_tooltip(self, event):
         if self.tooltip_window: self.tooltip_window.destroy()
         self.tooltip_window = None
+
 
 
