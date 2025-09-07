@@ -337,6 +337,8 @@ class MainWindow:
                 self._set_processing(False)
         threading.Thread(target=thread_target, daemon=True).start()
 
+# Dans src/gui/main_window.py, méthode _process_layout
+
     def _process_layout(self):
         def thread_target():
             self._set_processing(True, "Calcul de la mise en page...")
@@ -346,10 +348,15 @@ class MainWindow:
                 with open(session_dir / "4_parsed_translations.json", "r", encoding="utf-8") as f:
                     translations = json.load(f)
                 
+                # --- CORRECTION : Appeler la méthode qui injecte les traductions ---
+                self.debug_logger.info("Injection des traductions dans le DOM avant le layout...")
                 render_version = self._prepare_render_version(page_objects, translations)
                 
+                # --- PASSER LA VERSION TRADUITE au LayoutProcessor ---
                 final_pages = self.layout_processor.process_pages(render_version)
-                with open(session_dir / "5_final_layout.json", "w", encoding="utf-8") as f: json.dump([asdict(p) for p in final_pages], f, indent=2)
+                
+                with open(session_dir / "5_final_layout.json", "w", encoding="utf-8") as f: 
+                    json.dump([asdict(p) for p in final_pages], f, indent=2)
                 self.debug_logger.info("Fichier de débogage '5_final_layout.json' sauvegardé.")
                 
                 self.root.after(0, lambda: self.layout_results_text.config(state='normal'))
@@ -498,4 +505,5 @@ class ToolTip:
     def hide_tooltip(self, event):
         if self.tooltip_window: self.tooltip_window.destroy()
         self.tooltip_window = None
+
 
