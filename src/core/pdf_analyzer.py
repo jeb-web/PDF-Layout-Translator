@@ -2,7 +2,7 @@
 # -*- coding: utf-8 -*-
 """
 PDF Layout Translator - Analyseur de PDF
-*** VERSION 2.0 - LOGIQUE D'UNIFICATION CORRIGÉE ***
+*** VERSION 2.1 - ALGORITHME D'UNIFICATION ITÉRATIF ***
 """
 import logging
 import re
@@ -32,62 +32,97 @@ class PDFAnalyzer:
         last_span_a = block_a.paragraphs[-1].spans[-1]
         first_span_b = block_b.paragraphs[0].spans[0]
 
-        # --- DÉBUT DE LA CORRECTION v2.0 ---
-        # Règle 1 : Vérification verticale (légèrement assouplie)
         vertical_gap = block_b.bbox[1] - block_a.bbox[3]
-        line_height_threshold = last_span_a.font.size * 2.5  # Tolérance augmentée
+        line_height_threshold = last_span_a.font.size * 2.5
         if vertical_gap >= line_height_threshold:
             return False, f"Écart vertical trop grand ({vertical_gap:.1f} >= {line_height_threshold:.1f})"
 
-        # Règle 2 : Remplacement de l'alignement strict par le non-chevauchement
-        # Les blocs ne sont pas fusionnés SEULEMENT si l'un se termine complètement avant que l'autre ne commence.
         a_x1, _, a_x2, _ = block_a.bbox
         b_x1, _, b_x2, _ = block_b.bbox
         if (a_x2 < b_x1) or (b_x2 < a_x1):
             return False, f"Pas de chevauchement horizontal (A_x2:{a_x2:.1f} < B_x1:{b_x1:.1f} ou B_x2:{b_x2:.1f} < A_x1:{a_x1:.1f})"
         
-        # [SUPPRIMÉ] Ancienne règle trop stricte
-        # horizontal_gap = abs(last_span_a.bbox[0] - first_span_b.bbox[0])
-        # if horizontal_gap > 10:
-        #     return False, f"Désalignement horizontal significatif ({horizontal_gap:.1f} > 10)"
-
-        # Règle 3 : Changement de style (inchangée)
         style_a = last_span_a.font
         style_b = first_span_b.font
-        font_name_a = style_a.name.split('-')[0]
-        font_name_b = style_b.name.split('-')[0]
-        if font_name_a != font_name_b:
-            return False, f"Changement de police ({style_a.name} -> {style_b.name})"
-        if abs(style_a.size - style_b.size) > 0.5:
-            return False, f"Changement de taille ({style_a.size:.1f} -> {style_b.size:.1f})"
-        # --- FIN DE LA CORRECTION ---
+        
+        # On ne fusionne pas si le style change drastiquement (suggérant un titre)
+        is_title_change = (style_b.is_bold and not style_a.is_bold) or (style_b.size > style_a.size + 1)
+        
+        # On ne fusionne pas non plus si la phrase semble terminée et que le style change un peu
+        text_a = "".join(s.text for s in block_a.paragraphs[-1].spans).strip()
+        ends_with_punctuation = text_a.endswith(('.', '!', '?', ':'))
+        
+        style_is_different = (style_a.name != style_b.name or abs(style_a.size - style_b.size) > 0.5)
+
+        if is_title_change or (ends_with_punctuation and style_is_different):
+             return False, f"Changement de style sémantique (titre ou fin de phrase)"
             
         return True, "Règles de fusion respectées"
 
     def _unify_text_blocks(self, blocks: List[TextBlock]) -> List[TextBlock]:
         if not blocks: return []
-
-        self.debug_logger.info("    > Démarrage de la phase d'unification des blocs (v2.0)...")
-        unified_blocks = []
-        current_block = copy.deepcopy(blocks[0])
-
-        for next_block in blocks[1:]:
-            should_merge, reason = self._should_merge(current_block, next_block)
-            if should_merge:
-                current_block.paragraphs.extend(next_block.paragraphs)
-                current_block.bbox = (min(current_block.bbox[0], next_block.bbox[0]), min(current_block.bbox[1], next_block.bbox[1]), max(current_block.bbox[2], next_block.bbox[2]), max(current_block.bbox[3], next_block.bbox[3]))
-                self.debug_logger.info(f"      - Fusion du bloc {next_block.id} dans {current_block.id}. Raison: {reason}")
-            else:
-                self.debug_logger.info(f"      - Finalisation du bloc unifié {current_block.id}. Raison de la rupture: {reason}")
-                unified_blocks.append(current_block)
-                current_block = copy.deepcopy(next_block)
+        self.debug_logger.info("    > Démarrage de la phase d'unification des blocs (v2.1 - Itératif)...")
         
-        unified_blocks.append(current_block)
-        self.debug_logger.info(f"    > Unification terminée. Nombre de blocs: {len(blocks)} -> {len(unified_blocks)}")
-        return unified_blocks
+        # --- DÉBUT DE LA CORRECTION v2.1 ---
+        # Remplacement de l'algorithme à passage unique par un algorithme itératif.
+        
+        work_list = copy.deepcopy(blocks)
+        
+        while True:
+            merged_in_pass = False
+            next_pass_list = []
+            
+            i = 0
+            while i < len(work_list):
+                current_block = work_list[i]
+                
+                # Chercher le meilleur candidat pour la fusion
+                best_candidate_index = -1
+                min_distance = float('inf')
+
+                for j in range(len(work_list)):
+                    if i == j: continue
+                    candidate_block = work_list[j]
+                    
+                    # On ne fusionne que des blocs verticalement proches
+                    if candidate_block.bbox[1] > current_block.bbox[3]:
+                        should_merge, reason = self._should_merge(current_block, candidate_block)
+                        if should_merge:
+                            distance = candidate_block.bbox[1] - current_block.bbox[3]
+                            if distance < min_distance:
+                                min_distance = distance
+                                best_candidate_index = j
+
+                if best_candidate_index != -1:
+                    merged_in_pass = True
+                    candidate_to_merge = work_list.pop(best_candidate_index)
+                    
+                    self.debug_logger.info(f"      - Fusion du bloc {candidate_to_merge.id} dans {current_block.id}.")
+                    
+                    current_block.paragraphs.extend(candidate_to_merge.paragraphs)
+                    current_block.bbox = (
+                        min(current_block.bbox[0], candidate_to_merge.bbox[0]),
+                        min(current_block.bbox[1], candidate_to_merge.bbox[1]),
+                        max(current_block.bbox[2], candidate_to_merge.bbox[2]),
+                        max(current_block.bbox[3], candidate_to_merge.bbox[3])
+                    )
+                    # On reste sur le même 'current_block' pour voir s'il peut absorber d'autres blocs
+                    continue 
+                
+                next_pass_list.append(current_block)
+                i += 1
+            
+            work_list = next_pass_list
+            if not merged_in_pass:
+                break # Aucune fusion n'a eu lieu pendant toute la passe, le processus est stable.
+
+        self.debug_logger.info(f"    > Unification terminée. Nombre de blocs: {len(blocks)} -> {len(work_list)}")
+        return work_list
+        # --- FIN DE LA CORRECTION ---
+
 
     def analyze_pdf(self, pdf_path: Path) -> List[PageObject]:
-        self.logger.info(f"Début de l'analyse architecturale (v2.0 - Unification Corrigée) de {pdf_path}")
+        self.logger.info(f"Début de l'analyse architecturale (v2.1 - Unification Itérative) de {pdf_path}")
         doc = fitz.open(pdf_path)
         pages = []
 
@@ -232,4 +267,4 @@ class PDFAnalyzer:
                                        f"(limité par {'voisin' if closest_neighbor_x != right_boundary else 'marge'})")
             pages.append(page_obj)
         doc.close()
-        return pages
+        return pages```
