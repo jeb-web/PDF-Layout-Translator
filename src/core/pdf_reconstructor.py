@@ -2,11 +2,11 @@
 # -*- coding: utf-8 -*-
 """
 PDF Layout Translator - Moteur de Rendu PDF
-*** VERSION DE DÉBOGAGE - JALON 2.1 (Méthode Directe) ***
+*** NOUVELLE VERSION - DESSINATEUR DE SPANS PRÉ-POSITIONNÉS ***
 """
 import logging
 from pathlib import Path
-from typing import List, Tuple, Dict
+from typing import List, Tuple
 import fitz
 from core.data_model import PageObject
 from utils.font_manager import FontManager
@@ -29,7 +29,7 @@ class PDFReconstructor:
         except ValueError: return (0, 0, 0)
 
     def render_pages(self, pages: List[PageObject], output_path: Path):
-        self.debug_logger.info("--- DÉMARRAGE PDFRECONSTRUCTOR (Jalon 2.1) ---")
+        self.debug_logger.info("--- DÉMARRAGE PDFRECONSTRUCTOR (v2 - Mode Dessinateur) ---")
         doc = fitz.open()
 
         for page_data in pages:
@@ -47,36 +47,27 @@ class PDFReconstructor:
                         self.debug_logger.error(f"  -> ERREUR enregistrement police '{font_name}': {e}")
 
             for block in page_data.text_blocks:
-                self.debug_logger.info(f"  > Traitement du TextBlock ID: {block.id}")
-                if not block.final_bbox or not block.spans: continue
-                
-                shape = page.new_shape()
-                
-                # Suivre la position verticale
-                current_y = block.final_bbox[1]
+                self.debug_logger.info(f"  > Dessin du TextBlock ID: {block.id}")
+                if not block.spans: continue
                 
                 for span in block.spans:
-                    if not span.text.strip(): continue
+                    if not span.text or not span.final_bbox:
+                        if not span.final_bbox:
+                             self.debug_logger.warning(f"    ! Span ignoré (ID: {span.id}) car `final_bbox` est manquant.")
+                        continue
 
-                    # Calcul du rectangle pour ce span
-                    span_rect = fitz.Rect(
-                        block.final_bbox[0], 
-                        current_y, 
-                        block.final_bbox[2], 
-                        current_y + span.font.size * 1.5 # Estimation de la hauteur
-                    )
-                    
+                    span_rect = fitz.Rect(span.final_bbox)
                     text = span.text
                     fontname = span.font.name
                     fontsize = span.font.size
                     color_rgb = self._hex_to_rgb(span.font.color)
 
-                    self.debug_logger.info(f"    - Rendu du span : text='{text}'")
+                    self.debug_logger.info(f"    - Rendu du mot/span : '{text}'")
                     self.debug_logger.info(f"      -> rect={span_rect}, font='{fontname}', size={fontsize}, color={color_rgb}")
                     
                     try:
-                        # Utiliser insert_textbox pour chaque span
-                        rc = shape.insert_textbox(
+                        # Utiliser insert_textbox qui gère bien le clipping et l'alignement vertical
+                        rc = page.insert_textbox(
                             span_rect,
                             text,
                             fontname=fontname,
@@ -84,18 +75,11 @@ class PDFReconstructor:
                             color=color_rgb,
                             align=block.alignment
                         )
-                        self.debug_logger.info(f"      -> Texte inséré. Surplus de texte : {rc:.2f}")
                         if rc < 0:
-                             self.debug_logger.warning("      !! ATTENTION : Le texte a débordé du rectangle alloué.")
+                             self.debug_logger.warning(f"      !! ATTENTION : Le texte '{text}' a débordé du rectangle alloué de {abs(rc):.2f} unités.")
                         
-                        # Mettre à jour la position y pour le prochain span
-                        # Ceci est une simplification et devra être amélioré
-                        current_y += fontsize * 1.2
-
                     except Exception as e:
                         self.debug_logger.error(f"    !! ERREUR sur insert_textbox pour span {span.id}: {e}")
-
-                shape.commit()
 
         self.debug_logger.info(f"Sauvegarde du PDF final vers : {output_path}")
         doc.save(output_path, garbage=4, deflate=True)
