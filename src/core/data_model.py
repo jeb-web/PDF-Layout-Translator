@@ -2,7 +2,7 @@
 # -*- coding: utf-8 -*-
 """
 PDF Layout Translator - Modèle de Données
-*** VERSION FINALE ET STABILISÉE v1.2 ***
+*** VERSION FINALE ET STABILISÉE v1.3 ***
 """
 from dataclasses import dataclass, field
 from typing import List, Tuple, Optional
@@ -41,6 +41,7 @@ class TextBlock:
     alignment: int = 0
     final_bbox: Tuple[float, float, float, float] = None
     spans: List[TextSpan] = field(default_factory=list, repr=False)
+    available_width: float = 0.0  # NOUVEAU v2.2 : Largeur max disponible calculée par l'analyseur
 
 @dataclass
 class PageObject:
