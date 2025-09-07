@@ -2,7 +2,7 @@
 # -*- coding: utf-8 -*-
 """
 PDF Layout Translator - Moteur de Mise en Page
-*** VERSION FINALE ET STABILISÉE v2.5 - SÉPARATION PUCE/TEXTE INTÉGRÉE ***
+*** VERSION FINALE ET STABILISÉE v2.6 - MISE EN PAGE DYNAMIQUE ***
 """
 import logging
 import re
@@ -30,7 +30,7 @@ class LayoutProcessor:
         return len(text) * font_size * 0.6
 
     def process_pages(self, pages: List[PageObject]) -> List[PageObject]:
-        self.debug_logger.info("--- DÉMARRAGE LAYOUTPROCESSOR (v2.5 - Logique fiabilisée) ---")
+        self.debug_logger.info("--- DÉMARRAGE LAYOUTPROCESSOR (v2.6 - Mise en Page Dynamique) ---")
         for page in pages:
             self.debug_logger.info(f"  > Traitement de la Page {page.page_number}")
             for block in page.text_blocks:
@@ -44,12 +44,6 @@ class LayoutProcessor:
                     if not para.spans:
                         continue
 
-                    x_start = block.bbox[0]
-                    block_width = block.bbox[2] - x_start
-                    current_x = x_start
-                    x_text_start = x_start
-                    max_font_size_in_line = para.spans[0].font.size
-                    
                     spans_to_process = list(para.spans)
                     all_words_info = []
 
@@ -61,7 +55,6 @@ class LayoutProcessor:
                             marker_text = first_span.text[:marker_end_pos]
                             content_text = first_span.text[marker_end_pos:]
                             
-                            self.debug_logger.info(f"         > Application de la logique de liste. Marqueur: '{marker_text.strip()}'")
                             all_words_info.append((marker_text, first_span, 'marker'))
                             
                             if content_text:
@@ -70,7 +63,39 @@ class LayoutProcessor:
                     for span in spans_to_process:
                         if span.text:
                             all_words_info.extend([(word, span, 'content') for word in span.text.split(' ') if word])
+                    
+                    # --- DÉBUT DE LA LOGIQUE DE MISE EN PAGE DYNAMIQUE (v2.6) ---
+                    full_para_text_for_measure = " ".join([word for word, span, word_type in all_words_info])
+                    ideal_width = 0
+                    if para.spans:
+                        representative_span = para.spans[0]
+                        ideal_width = self._get_text_width(full_para_text_for_measure, representative_span.font.name, representative_span.font.size)
 
+                    original_block_width = block.bbox[2] - block.bbox[0]
+                    max_available_width = block.available_width if block.available_width > 5 else original_block_width
+
+                    self.debug_logger.info(f"         [Layout v2.6] Largeur originale={original_block_width:.1f}, "
+                                           f"Largeur traduite idéale={ideal_width:.1f}, "
+                                           f"Largeur max disponible={max_available_width:.1f}")
+
+                    block_width_for_reflow = original_block_width
+                    if ideal_width > original_block_width:
+                        if ideal_width <= (max_available_width + 1.0): # Ajout d'une petite tolérance
+                            block_width_for_reflow = ideal_width
+                            self.debug_logger.info(f"         [Layout Decision] DÉCISION : Expansion de la boîte à {block_width_for_reflow:.1f}px.")
+                        else:
+                            block_width_for_reflow = max_available_width
+                            self.debug_logger.warning(f"         [Layout Decision] Expansion impossible ({ideal_width:.1f} > {max_available_width:.1f}). DÉCISION : Retour à la ligne forcé.")
+                    else:
+                        self.debug_logger.info("         [Layout Decision] Le texte tient dans la boîte originale. Pas de changement.")
+                    # --- FIN DE LA LOGIQUE DE MISE EN PAGE DYNAMIQUE ---
+
+                    x_start = block.bbox[0]
+                    block_width = block_width_for_reflow
+                    current_x = x_start
+                    x_text_start = x_start
+                    max_font_size_in_line = para.spans[0].font.size if para.spans else 10.0
+                    
                     is_first_word_of_line = True
                     for i, (word, span, word_type) in enumerate(all_words_info):
                         is_last_word = (i == len(all_words_info) - 1)
@@ -113,17 +138,6 @@ class LayoutProcessor:
                 block.spans = all_new_spans_for_block
                 final_height = (current_y - block.bbox[1]) if all_new_spans_for_block else 0
                 block.final_bbox = (block.bbox[0], block.bbox[1], block.bbox[2], block.bbox[1] + final_height)
-                
-                # --- TRACE 3 : VÉRIFICATION À LA FIN DU TRAITEMENT D'UN BLOC ---
-                self.debug_logger.info(f"    --- POINT DE CONTRÔLE 3 (FIN DU LAYOUTPROCESSOR POUR LE BLOC {block.id}) ---")
-                if block.spans:
-                    self.debug_logger.info(f"      > Le bloc contient {len(block.spans)} spans.")
-                    self.debug_logger.info(f"      > Exemple du premier span positionné: id={block.spans[0].id}, text='{block.spans[0].text.strip()}', final_bbox={block.spans[0].final_bbox}")
-                else:
-                    self.debug_logger.info("      > ATTENTION: La liste de spans pour ce bloc est vide après traitement.")
-                self.debug_logger.info(f"    --- FIN DU POINT DE CONTRÔLE 3 ---")
-
 
         self.debug_logger.info("--- FIN LAYOUTPROCESSOR ---")
         return pages
-
