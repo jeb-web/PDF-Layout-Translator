@@ -2,7 +2,7 @@
 # -*- coding: utf-8 -*-
 """
 PDF Layout Translator - Analyseur de PDF
-*** NOUVELLE VERSION v1.1 - MESURE DE L'INDENTATION DES LISTES ***
+*** NOUVELLE VERSION v1.2 - DÉTECTION DE PUCE CORRIGÉE ET ROBUSTE ***
 """
 import logging
 import re
@@ -19,12 +19,12 @@ class PDFAnalyzer:
         return re.sub(r"^[A-Z]{6}\+", "", font_name)
 
     def analyze_pdf(self, pdf_path: Path) -> List[PageObject]:
-        self.logger.info(f"Début de l'analyse architecturale (v1.1 - Indentation) de {pdf_path}")
+        self.logger.info(f"Début de l'analyse architecturale (v1.2 - Détection de puce) de {pdf_path}")
         doc = fitz.open(pdf_path)
         pages = []
 
         for page_num, page in enumerate(doc):
-            # ... (le début de la fonction reste identique) ...
+            # ... (logique de début inchangée) ...
             page_dimensions = (page.rect.width, page.rect.height)
             page_obj = PageObject(page_number=page_num + 1, dimensions=page_dimensions)
             
@@ -32,7 +32,7 @@ class PDFAnalyzer:
             
             block_counter = 0
             for block_data in sorted([b for b in blocks_data if b['type'] == 0], key=lambda b: (b['bbox'][1], b['bbox'][0])):
-                # ... (la logique de création de spans reste identique) ...
+                # ... (logique de création de spans inchangée) ...
                 block_counter += 1
                 block_id = f"P{page_num+1}_B{block_counter}"
                 
@@ -56,7 +56,7 @@ class PDFAnalyzer:
                             is_italic="italic" in font_name.lower()
                         )
                         
-                        span_text = span_data['text'].replace('\t', '    ') # Remplacer les tabulations
+                        span_text = span_data['text'].replace('\t', '    ')
                         if lines[line_key]['spans'] and span_data['bbox'][0] > (lines[line_key]['spans'][-1].bbox[2] + 0.5):
                             span_text = " " + span_text
 
@@ -73,9 +73,6 @@ class PDFAnalyzer:
                     
                     is_last_line_of_block = (i == len(sorted_lines) - 1)
                     
-                    starts_with_bullet = line['spans'][0].text.strip().startswith(('•', '-', '–')) if line['spans'] else False
-                    starts_with_number = re.match(r'^\s*\d+\.?', line['spans'][0].text.strip()) is not None if line['spans'] else False
-
                     force_break = False
                     if not is_last_line_of_block:
                         # ... (la logique de détection de fin de paragraphe reste identique) ...
@@ -96,36 +93,53 @@ class PDFAnalyzer:
                             para_id = f"{block_id}_P{para_counter}"
                             paragraph = Paragraph(id=para_id, spans=current_paragraph_spans)
                             
-                            # --- NOUVELLE LOGIQUE : Mesurer l'indentation si c'est un item de liste ---
-                            first_span_text = current_paragraph_spans[0].text.lstrip()
-                            if first_span_text.startswith(('•', '-', '–')) or re.match(r'^\d+\.?', first_span_text):
-                                paragraph.is_list_item = True
-                                
-                                # Le premier span contient la puce.
-                                marker_span = current_paragraph_spans[0]
-                                paragraph.list_marker_text = marker_span.text.strip()
-                                
-                                if len(current_paragraph_spans) > 1:
-                                    # L'indentation est la position X du début du deuxième span.
-                                    text_span = current_paragraph_spans[1]
-                                    paragraph.text_indent = text_span.bbox[0]
-                                else:
-                                    # Si un seul span, on estime une indentation standard.
-                                    marker_width = marker_span.bbox[2] - marker_span.bbox[0]
-                                    paragraph.text_indent = marker_span.bbox[0] + marker_width + (marker_span.font.size * 0.5)
-                                
-                                # Nettoyer le texte du premier span pour ne garder que la puce
-                                marker_span.text = marker_span.text.strip() + " "
-                            
+                            # --- LOGIQUE DE DÉTECTION DE LISTE CORRIGÉE ---
+                            if current_paragraph_spans:
+                                first_span = current_paragraph_spans[0]
+                                # Utiliser une expression régulière pour trouver la puce/numéro au tout début du texte
+                                match = re.match(r'^(\s*[•\-–]\s*|\s*\d+\.?\s*)', first_span.text)
+                                if match:
+                                    paragraph.is_list_item = True
+                                    
+                                    # Le marqueur est ce que l'expression régulière a capturé
+                                    marker_text = match.group(1)
+                                    paragraph.list_marker_text = marker_text.strip()
+                                    
+                                    # Le reste du texte est le contenu
+                                    content_text = first_span.text[len(marker_text):]
+                                    
+                                    # Mettre à jour le premier span pour ne contenir QUE la puce
+                                    first_span.text = marker_text
+
+                                    # Créer un nouveau span pour le reste du texte s'il y en a
+                                    if content_text:
+                                        # Cloner le premier span pour le style, mais ajuster le contenu et la bbox
+                                        new_span = copy.deepcopy(first_span)
+                                        new_span.id = f"{first_span.id}_cont"
+                                        new_span.text = content_text
+                                        # On ne peut pas connaître la bbox exacte du nouveau span, mais on peut l'estimer
+                                        # Le LayoutProcessor recalculera tout, donc la bbox initiale ici est moins critique.
+                                        # On le place juste après la puce.
+                                        marker_width = first_span.bbox[2] - first_span.bbox[0]
+                                        new_bbox = list(first_span.bbox)
+                                        new_bbox[0] += marker_width
+                                        new_span.bbox = tuple(new_bbox)
+                                        current_paragraph_spans.insert(1, new_span)
+                                    
+                                    # Définir l'indentation
+                                    if len(current_paragraph_spans) > 1:
+                                        paragraph.text_indent = current_paragraph_spans[1].bbox[0]
+                                    else:
+                                        paragraph.text_indent = first_span.bbox[0] + (first_span.font.size * 2)
+
                             text_block.paragraphs.append(paragraph)
                             para_counter += 1
                             current_paragraph_spans = []
-                
+
                 text_block.spans = [span for para in text_block.paragraphs for span in para.spans]
                 if text_block.paragraphs:
                     page_obj.text_blocks.append(text_block)
 
             pages.append(page_obj)
-
         doc.close()
         return pages
