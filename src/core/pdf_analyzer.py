@@ -267,4 +267,5 @@ class PDFAnalyzer:
                                        f"(limité par {'voisin' if closest_neighbor_x != right_boundary else 'marge'})")
             pages.append(page_obj)
         doc.close()
-        return pages```
+        return pages
+
