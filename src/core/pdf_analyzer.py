@@ -33,8 +33,8 @@ class PDFAnalyzer:
             return False, f"Écart vertical trop grand ({vertical_gap:.1f} >= {line_height_threshold:.1f})"
 
         horizontal_gap = abs(last_span_a.bbox[0] - first_span_b.bbox[0])
-        if horizontal_gap > 15: # Tolérance augmentée
-            return False, f"Désalignement horizontal ({horizontal_gap:.1f} > 15)"
+        if horizontal_gap > 15:
+            return False, f"Désalignement horizontal significatif ({horizontal_gap:.1f} > 15)"
 
         style_a = last_span_a.font
         style_b = first_span_b.font
@@ -110,7 +110,6 @@ class PDFAnalyzer:
                     is_last_line_of_block = (i == len(sorted_lines) - 1)
                     
                     force_break = False
-                    reason = ""
                     if not is_last_line_of_block:
                         next_line = sorted_lines[i+1]
                         if not next_line['spans']: continue
@@ -125,13 +124,10 @@ class PDFAnalyzer:
 
                         if next_starts_with_bullet or next_starts_with_number:
                             force_break = True
-                            reason = "Nouvel item de liste"
                         elif vertical_gap > line_height * 0.45:
                             force_break = True
-                            reason = f"Écart vertical large"
                         elif full_line_text.endswith(('.', '!', '?', ':')):
                             force_break = True
-                            reason = "Ponctuation de fin de ligne"
                     
                     if is_last_line_of_block or force_break:
                         if current_paragraph_spans:
