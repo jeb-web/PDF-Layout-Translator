@@ -2,7 +2,7 @@
 # -*- coding: utf-8 -*-
 """
 PDF Layout Translator - Analyseur de PDF
-*** VERSION FINALE ET STABILISÉE v1.4 - SÉPARATION ROBUSTE PUCE/TEXTE ***
+*** VERSION FINALE ET STABILISÉE v1.5 - ANALYSE SPATIALE INTÉGRÉE ***
 """
 import logging
 import re
@@ -21,7 +21,7 @@ class PDFAnalyzer:
         return re.sub(r"^[A-Z]{6}\+", "", font_name)
 
     def analyze_pdf(self, pdf_path: Path) -> List[PageObject]:
-        self.logger.info(f"Début de l'analyse architecturale (v1.4 - Séparation robuste) de {pdf_path}")
+        self.logger.info(f"Début de l'analyse architecturale (v1.5 - Analyse Spatiale) de {pdf_path}")
         doc = fitz.open(pdf_path)
         pages = []
 
@@ -95,21 +95,14 @@ class PDFAnalyzer:
                                 first_span = current_paragraph_spans[0]
                                 match = re.match(r'^(\s*[•\-–]\s*|\s*\d+\.?\s*)', first_span.text)
                                 if match:
-                                    self.debug_logger.info(f"  > Détection d'item de liste dans le paragraphe {para_id}")
-                                    self.debug_logger.info(f"    > Span original: '{first_span.text}'")
                                     paragraph.is_list_item = True
-                                    
                                     marker_end_pos = match.end()
                                     marker_text = first_span.text[:marker_end_pos]
                                     content_text = first_span.text[marker_end_pos:]
-                                    
                                     paragraph.list_marker_text = marker_text.strip()
-                                    self.debug_logger.info(f"    > Marqueur identifié: '{marker_text.strip()}'")
-                                    
                                     first_span.text = marker_text
                                     
                                     if content_text:
-                                        self.debug_logger.info(f"    > Contenu restant: '{content_text}'")
                                         new_span = copy.deepcopy(first_span)
                                         new_span.id = f"{first_span.id}_cont"
                                         new_span.text = content_text
@@ -122,14 +115,11 @@ class PDFAnalyzer:
                                         new_span.bbox = tuple(new_bbox)
                                         
                                         paragraph.spans.insert(1, new_span)
-                                        self.debug_logger.info(f"    > Nouveau span créé (ID {new_span.id}) et inséré.")
                                     
                                     if len(paragraph.spans) > 1:
                                         paragraph.text_indent = paragraph.spans[1].bbox[0]
-                                        self.debug_logger.info(f"    > Indentation calculée à partir du span suivant: {paragraph.text_indent:.2f}")
                                     else:
                                         paragraph.text_indent = first_span.bbox[0] + (first_span.font.size * 2)
-                                        self.debug_logger.warning(f"    > Indentation estimée (pas de span de contenu): {paragraph.text_indent:.2f}")
 
                             text_block.paragraphs.append(paragraph)
                             para_counter += 1
@@ -138,6 +128,29 @@ class PDFAnalyzer:
                 text_block.spans = [span for para in text_block.paragraphs for span in para.spans]
                 if text_block.paragraphs:
                     page_obj.text_blocks.append(text_block)
+
+            # --- NOUVELLE ÉTAPE v2.2 : ANALYSE SPATIALE CONTEXTUELLE ---
+            self.debug_logger.info(f"  > Démarrage de l'analyse spatiale pour la page {page_num + 1}")
+            for i, block in enumerate(page_obj.text_blocks):
+                right_boundary = page_dimensions[0]
+                closest_neighbor_x = right_boundary
+                
+                for j, other_block in enumerate(page_obj.text_blocks):
+                    if i == j: continue
+                        
+                    if other_block.bbox[0] >= block.bbox[2]:
+                        current_top, current_bottom = block.bbox[1], block.bbox[3]
+                        other_top, other_bottom = other_block.bbox[1], other_block.bbox[3]
+                        
+                        if max(current_top, other_top) < min(current_bottom, other_bottom):
+                            closest_neighbor_x = min(closest_neighbor_x, other_block.bbox[0])
+
+                block.available_width = closest_neighbor_x - block.bbox[0]
+                
+                original_width = block.bbox[2] - block.bbox[0]
+                self.debug_logger.info(f"    - Bloc {block.id}: Largeur originale={original_width:.1f}, "
+                                       f"Largeur max disponible={block.available_width:.1f} "
+                                       f"(limité par {'voisin' if closest_neighbor_x != right_boundary else 'marge'})")
 
             pages.append(page_obj)
         doc.close()
