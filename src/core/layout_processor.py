@@ -51,18 +51,17 @@ class LayoutProcessor:
                     max_font_size_in_line = para.spans[0].font.size
                     
                     spans_to_process = list(para.spans)
-                    
                     all_words_info = []
 
                     if para.is_list_item and spans_to_process:
-                        first_span = spans_to_process.pop(0) 
+                        first_span = spans_to_process.pop(0)
                         match = re.match(r'^(\s*[•\-–]\s*|\s*\d+\.?\s*)', first_span.text)
                         if match:
-                            self.debug_logger.info(f"         > Application de la logique de liste sur le texte traduit: '{first_span.text[:30]}...'")
                             marker_end_pos = match.end()
                             marker_text = first_span.text[:marker_end_pos]
                             content_text = first_span.text[marker_end_pos:]
                             
+                            self.debug_logger.info(f"         > Application de la logique de liste. Marqueur: '{marker_text.strip()}'")
                             all_words_info.append((marker_text, first_span, 'marker'))
                             
                             if content_text:
@@ -75,7 +74,7 @@ class LayoutProcessor:
                     is_first_word_of_line = True
                     for i, (word, span, word_type) in enumerate(all_words_info):
                         is_last_word = (i == len(all_words_info) - 1)
-                        word_with_space = word if is_last_word else word + ' '
+                        word_with_space = word if is_last_word and word_type == 'marker' else word + ' '
                         
                         if '\n' in word_with_space:
                             current_y += max_font_size_in_line * 1.2
@@ -108,13 +107,23 @@ class LayoutProcessor:
                         
                         current_x += word_width
                         is_first_word_of_line = False
-
+                    
                     current_y += max_font_size_in_line * 1.2
 
                 block.spans = all_new_spans_for_block
                 final_height = (current_y - block.bbox[1]) if all_new_spans_for_block else 0
                 block.final_bbox = (block.bbox[0], block.bbox[1], block.bbox[2], block.bbox[1] + final_height)
-                self.debug_logger.info(f"    <- Fin du bloc {block.id}. Nouvelle hauteur: {final_height:.2f}px.")
+                
+                # --- TRACE 3 : VÉRIFICATION À LA FIN DU TRAITEMENT D'UN BLOC ---
+                self.debug_logger.info(f"    --- POINT DE CONTRÔLE 3 (FIN DU LAYOUTPROCESSOR POUR LE BLOC {block.id}) ---")
+                if block.spans:
+                    self.debug_logger.info(f"      > Le bloc contient {len(block.spans)} spans.")
+                    self.debug_logger.info(f"      > Exemple du premier span positionné: id={block.spans[0].id}, text='{block.spans[0].text.strip()}', final_bbox={block.spans[0].final_bbox}")
+                else:
+                    self.debug_logger.info("      > ATTENTION: La liste de spans pour ce bloc est vide après traitement.")
+                self.debug_logger.info(f"    --- FIN DU POINT DE CONTRÔLE 3 ---")
+
 
         self.debug_logger.info("--- FIN LAYOUTPROCESSOR ---")
         return pages
+
