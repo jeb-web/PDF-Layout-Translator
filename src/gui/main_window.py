@@ -2,10 +2,7 @@
 # -*- coding: utf-8 -*-
 """
 PDF Layout Translator - Fenêtre principale
-Interface graphique principale de l'application.
-
-Auteur: L'OréalGPT
-Version: 2.0.7 (Correction de la régression du FontDialog et des bugs de traduction)
+*** VERSION FINALE CORRIGÉE (FLUX DE DONNÉES) ***
 """
 
 import tkinter as tk
@@ -13,12 +10,12 @@ from tkinter import ttk, filedialog, messagebox, scrolledtext
 import threading
 import logging
 from pathlib import Path
-from typing import List, Dict
 import json
 import os
 from dataclasses import asdict
 from lxml import etree
 import copy
+from typing import List, Dict
 
 from core.session_manager import SessionManager
 from core.pdf_analyzer import PDFAnalyzer
@@ -342,14 +339,12 @@ class MainWindow:
             self._set_processing(True, "Calcul de la mise en page...")
             try:
                 session_dir = self.session_manager.get_session_directory(self.current_session_id)
-                
                 page_objects = self._load_dom_from_file(self.current_session_id, "1_dom_analysis.json")
-                
                 with open(session_dir / "4_parsed_translations.json", "r", encoding="utf-8") as f:
                     translations = json.load(f)
                 
                 self.debug_logger.info("Injection des traductions dans le DOM avant le layout...")
-                self._prepare_render_version(page_objects, translations) # Modifie 'page_objects' sur place
+                self._prepare_render_version(page_objects, translations)
                 
                 final_pages = self.layout_processor.process_pages(page_objects)
                 
@@ -375,7 +370,6 @@ class MainWindow:
         MODIFIE LES OBJETS 'pages' DIRECTEMENT EN MÉMOIRE.
         """
         self.debug_logger.info("--- Démarrage de _prepare_render_version (v3.1 - Modification directe) ---")
-        from lxml import etree
         
         span_map = {
             span.id: span 
@@ -517,8 +511,3 @@ class ToolTip:
     def hide_tooltip(self, event):
         if self.tooltip_window: self.tooltip_window.destroy()
         self.tooltip_window = None
-
-
-
-
-
