@@ -2,7 +2,7 @@
 # -*- coding: utf-8 -*-
 """
 PDF Layout Translator - Analyseur de PDF
-Construit un DOM de la page à partir du fichier PDF.
+*** NOUVELLE VERSION v1.1 - MESURE DE L'INDENTATION DES LISTES ***
 """
 import logging
 import re
@@ -19,11 +19,12 @@ class PDFAnalyzer:
         return re.sub(r"^[A-Z]{6}\+", "", font_name)
 
     def analyze_pdf(self, pdf_path: Path) -> List[PageObject]:
-        self.logger.info(f"Début de l'analyse architecturale (Jalon 1 - v2) de {pdf_path}")
+        self.logger.info(f"Début de l'analyse architecturale (v1.1 - Indentation) de {pdf_path}")
         doc = fitz.open(pdf_path)
         pages = []
 
         for page_num, page in enumerate(doc):
+            # ... (le début de la fonction reste identique) ...
             page_dimensions = (page.rect.width, page.rect.height)
             page_obj = PageObject(page_number=page_num + 1, dimensions=page_dimensions)
             
@@ -31,6 +32,7 @@ class PDFAnalyzer:
             
             block_counter = 0
             for block_data in sorted([b for b in blocks_data if b['type'] == 0], key=lambda b: (b['bbox'][1], b['bbox'][0])):
+                # ... (la logique de création de spans reste identique) ...
                 block_counter += 1
                 block_id = f"P{page_num+1}_B{block_counter}"
                 
@@ -54,41 +56,34 @@ class PDFAnalyzer:
                             is_italic="italic" in font_name.lower()
                         )
                         
-                        span_text = span_data['text']
-                        if lines[line_key]['spans'] and span_data['bbox'][0] > (lines[line_key]['spans'][-1].bbox[2] + 0.5): # Tolérance
+                        span_text = span_data['text'].replace('\t', '    ') # Remplacer les tabulations
+                        if lines[line_key]['spans'] and span_data['bbox'][0] > (lines[line_key]['spans'][-1].bbox[2] + 0.5):
                             span_text = " " + span_text
 
                         new_span = TextSpan(id=span_id, text=span_text, font=font_info, bbox=span_data['bbox'])
                         lines[line_key]['spans'].append(new_span)
 
                 if not lines: continue
-
                 sorted_lines = [lines[key] for key in sorted(lines.keys())]
                 
                 current_paragraph_spans = []
                 para_counter = 1
-
                 for i, line in enumerate(sorted_lines):
                     current_paragraph_spans.extend(line['spans'])
                     
                     is_last_line_of_block = (i == len(sorted_lines) - 1)
                     
-                    # --- NOUVELLE LOGIQUE DE DÉTECTION AMÉLIORÉE ---
                     starts_with_bullet = line['spans'][0].text.strip().startswith(('•', '-', '–')) if line['spans'] else False
                     starts_with_number = re.match(r'^\s*\d+\.?', line['spans'][0].text.strip()) is not None if line['spans'] else False
 
                     force_break = False
                     if not is_last_line_of_block:
+                        # ... (la logique de détection de fin de paragraphe reste identique) ...
                         next_line = sorted_lines[i+1]
-                        
-                        # Règle 1: Si la ligne suivante commence par une puce ou un numéro, la ligne actuelle est une fin de paragraphe.
                         next_starts_with_bullet = next_line['spans'][0].text.strip().startswith(('•', '-', '–')) if next_line['spans'] else False
                         next_starts_with_number = re.match(r'^\s*\d+\.?', next_line['spans'][0].text.strip()) is not None if next_line['spans'] else False
-
                         if next_starts_with_bullet or next_starts_with_number:
                             force_break = True
-                        
-                        # Règle 2: L'espacement vertical (si la règle 1 ne s'applique pas)
                         if not force_break:
                             line_height = line['bbox'][3] - line['bbox'][1]
                             if line_height <= 0: line_height = 10 
@@ -99,12 +94,34 @@ class PDFAnalyzer:
                     if is_last_line_of_block or force_break:
                         if current_paragraph_spans:
                             para_id = f"{block_id}_P{para_counter}"
-                            text_block.paragraphs.append(Paragraph(id=para_id, spans=current_paragraph_spans))
+                            paragraph = Paragraph(id=para_id, spans=current_paragraph_spans)
+                            
+                            # --- NOUVELLE LOGIQUE : Mesurer l'indentation si c'est un item de liste ---
+                            first_span_text = current_paragraph_spans[0].text.lstrip()
+                            if first_span_text.startswith(('•', '-', '–')) or re.match(r'^\d+\.?', first_span_text):
+                                paragraph.is_list_item = True
+                                
+                                # Le premier span contient la puce.
+                                marker_span = current_paragraph_spans[0]
+                                paragraph.list_marker_text = marker_span.text.strip()
+                                
+                                if len(current_paragraph_spans) > 1:
+                                    # L'indentation est la position X du début du deuxième span.
+                                    text_span = current_paragraph_spans[1]
+                                    paragraph.text_indent = text_span.bbox[0]
+                                else:
+                                    # Si un seul span, on estime une indentation standard.
+                                    marker_width = marker_span.bbox[2] - marker_span.bbox[0]
+                                    paragraph.text_indent = marker_span.bbox[0] + marker_width + (marker_span.font.size * 0.5)
+                                
+                                # Nettoyer le texte du premier span pour ne garder que la puce
+                                marker_span.text = marker_span.text.strip() + " "
+                            
+                            text_block.paragraphs.append(paragraph)
                             para_counter += 1
                             current_paragraph_spans = []
                 
                 text_block.spans = [span for para in text_block.paragraphs for span in para.spans]
-
                 if text_block.paragraphs:
                     page_obj.text_blocks.append(text_block)
 
