@@ -56,8 +56,8 @@ class PDFAnalyzer:
             
         return True, "Règles de fusion respectées"
 
-    # --- NOUVEAU v2.5 ---
-    # Méthode principale pour l'unification des blocs
+    # --- NOUVEAU v2.5.2 ---
+    # Méthode d'unification avec logs de débogage avancés
     def _unify_text_blocks(self, blocks: List[TextBlock]) -> List[TextBlock]:
         if not blocks:
             return []
@@ -68,12 +68,27 @@ class PDFAnalyzer:
         current_block = copy.deepcopy(blocks[0])
 
         for next_block in blocks[1:]:
+            # --- TRACES DE DÉBOGAGE AVANCÉES ---
+            self.debug_logger.info(f"      [Debug Unify] Tentative de comparaison entre {current_block.id} et {next_block.id}")
+            if not current_block.paragraphs:
+                self.debug_logger.warning(f"      [Debug Unify] ATTENTION: current_block {current_block.id} n'a pas de paragraphes.")
+            else:
+                self.debug_logger.info(f"      [Debug Unify] current_block {current_block.id} a {len(current_block.paragraphs)} paragraphe(s).")
+                if not current_block.paragraphs[-1].spans:
+                     self.debug_logger.warning(f"      [Debug Unify] ATTENTION: Le dernier paragraphe de {current_block.id} n'a pas de spans.")
+            
+            if not next_block.paragraphs:
+                self.debug_logger.warning(f"      [Debug Unify] ATTENTION: next_block {next_block.id} n'a pas de paragraphes.")
+            else:
+                self.debug_logger.info(f"      [Debug Unify] next_block {next_block.id} a {len(next_block.paragraphs)} paragraphe(s).")
+                if not next_block.paragraphs[0].spans:
+                     self.debug_logger.warning(f"      [Debug Unify] ATTENTION: Le premier paragraphe de {next_block.id} n'a pas de spans.")
+            # --- FIN DES TRACES ---
+
             should_merge, reason = self._should_merge(current_block, next_block)
             
             if should_merge:
-                # On fusionne le next_block dans le current_block
                 current_block.paragraphs.extend(next_block.paragraphs)
-                # On met à jour la Bbox pour qu'elle englobe les deux blocs
                 new_bbox = (
                     min(current_block.bbox[0], next_block.bbox[0]),
                     min(current_block.bbox[1], next_block.bbox[1]),
@@ -83,12 +98,10 @@ class PDFAnalyzer:
                 current_block.bbox = new_bbox
                 self.debug_logger.info(f"      - Fusion du bloc {next_block.id} dans {current_block.id}. Raison: {reason}")
             else:
-                # On finalise le bloc courant et on en commence un nouveau
                 self.debug_logger.info(f"      - Finalisation du bloc unifié {current_block.id}. Raison de la rupture: {reason}")
                 unified_blocks.append(current_block)
                 current_block = copy.deepcopy(next_block)
         
-        # On n'oublie pas d'ajouter le dernier bloc de travail
         unified_blocks.append(current_block)
         self.debug_logger.info(f"    > Unification terminée. Nombre de blocs: {len(blocks)} -> {len(unified_blocks)}")
         return unified_blocks
@@ -198,4 +211,5 @@ class PDFAnalyzer:
             pages.append(page_obj)
         doc.close()
         return pages
+
 
