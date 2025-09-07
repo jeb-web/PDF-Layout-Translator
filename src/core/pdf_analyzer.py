@@ -2,7 +2,7 @@
 # -*- coding: utf-8 -*-
 """
 PDF Layout Translator - Analyseur de PDF
-*** VERSION 1.9 - LOGIQUE DE PARAGRAPHE AFFINÉE ***
+*** VERSION 2.0 - LOGIQUE D'UNIFICATION CORRIGÉE ***
 """
 import logging
 import re
@@ -32,15 +32,26 @@ class PDFAnalyzer:
         last_span_a = block_a.paragraphs[-1].spans[-1]
         first_span_b = block_b.paragraphs[0].spans[0]
 
+        # --- DÉBUT DE LA CORRECTION v2.0 ---
+        # Règle 1 : Vérification verticale (légèrement assouplie)
         vertical_gap = block_b.bbox[1] - block_a.bbox[3]
-        line_height_threshold = last_span_a.font.size * 1.5
+        line_height_threshold = last_span_a.font.size * 2.5  # Tolérance augmentée
         if vertical_gap >= line_height_threshold:
             return False, f"Écart vertical trop grand ({vertical_gap:.1f} >= {line_height_threshold:.1f})"
 
-        horizontal_gap = abs(last_span_a.bbox[0] - first_span_b.bbox[0])
-        if horizontal_gap > 10:
-            return False, f"Désalignement horizontal significatif ({horizontal_gap:.1f} > 10)"
+        # Règle 2 : Remplacement de l'alignement strict par le non-chevauchement
+        # Les blocs ne sont pas fusionnés SEULEMENT si l'un se termine complètement avant que l'autre ne commence.
+        a_x1, _, a_x2, _ = block_a.bbox
+        b_x1, _, b_x2, _ = block_b.bbox
+        if (a_x2 < b_x1) or (b_x2 < a_x1):
+            return False, f"Pas de chevauchement horizontal (A_x2:{a_x2:.1f} < B_x1:{b_x1:.1f} ou B_x2:{b_x2:.1f} < A_x1:{a_x1:.1f})"
+        
+        # [SUPPRIMÉ] Ancienne règle trop stricte
+        # horizontal_gap = abs(last_span_a.bbox[0] - first_span_b.bbox[0])
+        # if horizontal_gap > 10:
+        #     return False, f"Désalignement horizontal significatif ({horizontal_gap:.1f} > 10)"
 
+        # Règle 3 : Changement de style (inchangée)
         style_a = last_span_a.font
         style_b = first_span_b.font
         font_name_a = style_a.name.split('-')[0]
@@ -49,13 +60,14 @@ class PDFAnalyzer:
             return False, f"Changement de police ({style_a.name} -> {style_b.name})"
         if abs(style_a.size - style_b.size) > 0.5:
             return False, f"Changement de taille ({style_a.size:.1f} -> {style_b.size:.1f})"
+        # --- FIN DE LA CORRECTION ---
             
         return True, "Règles de fusion respectées"
 
     def _unify_text_blocks(self, blocks: List[TextBlock]) -> List[TextBlock]:
         if not blocks: return []
 
-        self.debug_logger.info("    > Démarrage de la phase d'unification des blocs...")
+        self.debug_logger.info("    > Démarrage de la phase d'unification des blocs (v2.0)...")
         unified_blocks = []
         current_block = copy.deepcopy(blocks[0])
 
@@ -75,7 +87,7 @@ class PDFAnalyzer:
         return unified_blocks
 
     def analyze_pdf(self, pdf_path: Path) -> List[PageObject]:
-        self.logger.info(f"Début de l'analyse architecturale (v1.9 - Logique de Paragraphe Affinée) de {pdf_path}")
+        self.logger.info(f"Début de l'analyse architecturale (v2.0 - Unification Corrigée) de {pdf_path}")
         doc = fitz.open(pdf_path)
         pages = []
 
@@ -123,9 +135,6 @@ class PDFAnalyzer:
                         next_line = sorted_lines[i+1]
                         if not next_line['spans']: continue
 
-                        # --- DÉBUT DE LA NOUVELLE LOGIQUE DE RUPTURE (v1.9) ---
-
-                        # Règle 1 : Ruptures fortes (listes, écarts verticaux)
                         next_starts_with_bullet = next_line['spans'][0].text.strip().startswith(('•', '-', '–'))
                         next_starts_with_number = re.match(r'^\s*\d+\.?', next_line['spans'][0].text.strip())
                         if next_starts_with_bullet or next_starts_with_number:
@@ -140,7 +149,6 @@ class PDFAnalyzer:
                                 force_break = True
                                 reason = f"Écart vertical large ({vertical_gap:.1f} > {line_height * 0.4:.1f})"
 
-                        # Règle 2 : Rupture sur changement de style significatif
                         if not force_break:
                             last_span_style = current_paragraph_spans[-1].font
                             next_span_style = next_line['spans'][0].font
@@ -154,7 +162,6 @@ class PDFAnalyzer:
                                 force_break = True
                                 reason = "Changement de style et début par majuscule"
                         
-                        # Règle 3 : Rupture sur ponctuation de fin de phrase
                         if not force_break:
                             full_line_text = "".join(s.text for s in line['spans']).strip()
                             next_line_text = "".join(s.text for s in next_line['spans']).strip()
@@ -165,8 +172,6 @@ class PDFAnalyzer:
                             if ends_with_punctuation and next_starts_with_uppercase:
                                 force_break = True
                                 reason = "Ponctuation de fin de phrase + Majuscule"
-
-                        # --- FIN DE LA NOUVELLE LOGIQUE DE RUPTURE ---
 
                     if is_last_line_of_block or force_break:
                         if current_paragraph_spans:
