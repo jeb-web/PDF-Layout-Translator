@@ -2,7 +2,7 @@
 # -*- coding: utf-8 -*-
 """
 PDF Layout Translator - Moteur de Rendu PDF
-*** NOUVELLE VERSION - DESSINATEUR DE SPANS PRÉ-POSITIONNÉS ***
+*** NOUVELLE VERSION v2.1 - DESSIN DIRECT AVEC INSERT_TEXT ***
 """
 import logging
 from pathlib import Path
@@ -18,6 +18,7 @@ class PDFReconstructor:
         self.font_manager = font_manager
 
     def _hex_to_rgb(self, hex_color: str) -> Tuple[float, float, float]:
+        # ... (cette méthode reste inchangée)
         hex_color = hex_color.lstrip('#')
         if len(hex_color) == 3: hex_color = "".join([c * 2 for c in hex_color])
         if len(hex_color) != 6: return (0, 0, 0)
@@ -29,14 +30,13 @@ class PDFReconstructor:
         except ValueError: return (0, 0, 0)
 
     def render_pages(self, pages: List[PageObject], output_path: Path):
-        self.debug_logger.info("--- DÉMARRAGE PDFRECONSTRUCTOR (v2 - Mode Dessinateur) ---")
+        self.debug_logger.info("--- DÉMARRAGE PDFRECONSTRUCTOR (v2.1 - Mode Dessin Direct) ---")
         doc = fitz.open()
 
         for page_data in pages:
             self.debug_logger.info(f"Traitement de la Page {page_data.page_number}")
             page = doc.new_page(width=page_data.dimensions[0], height=page_data.dimensions[1])
 
-            # Enregistrer les polices nécessaires
             fonts_on_page = {span.font.name for block in page_data.text_blocks for span in block.spans}
             for font_name in fonts_on_page:
                 font_path = self.font_manager.get_replacement_font_path(font_name)
@@ -56,30 +56,29 @@ class PDFReconstructor:
                              self.debug_logger.warning(f"    ! Span ignoré (ID: {span.id}) car `final_bbox` est manquant.")
                         continue
 
-                    span_rect = fitz.Rect(span.final_bbox)
+                    # --- CORRECTION : Utiliser insert_text pour un positionnement précis ---
+                    # La coordonnée Y pour insert_text est la ligne de base (baseline) du texte.
+                    # On l'approxime comme étant le bas de la bounding box.
+                    pos = fitz.Point(span.final_bbox[0], span.final_bbox[3])
+                    
                     text = span.text
                     fontname = span.font.name
                     fontsize = span.font.size
                     color_rgb = self._hex_to_rgb(span.font.color)
 
-                    self.debug_logger.info(f"    - Rendu du mot/span : '{text}'")
-                    self.debug_logger.info(f"      -> rect={span_rect}, font='{fontname}', size={fontsize}, color={color_rgb}")
+                    self.debug_logger.info(f"    - Rendu du mot/span : '{text.strip()}'")
+                    self.debug_logger.info(f"      -> pos={pos}, font='{fontname}', size={fontsize}, color={color_rgb}")
                     
                     try:
-                        # Utiliser insert_textbox qui gère bien le clipping et l'alignement vertical
-                        rc = page.insert_textbox(
-                            span_rect,
+                        rc = page.insert_text(
+                            pos,
                             text,
                             fontname=fontname,
                             fontsize=fontsize,
-                            color=color_rgb,
-                            align=block.alignment
+                            color=color_rgb
                         )
-                        if rc < 0:
-                             self.debug_logger.warning(f"      !! ATTENTION : Le texte '{text}' a débordé du rectangle alloué de {abs(rc):.2f} unités.")
-                        
                     except Exception as e:
-                        self.debug_logger.error(f"    !! ERREUR sur insert_textbox pour span {span.id}: {e}")
+                        self.debug_logger.error(f"    !! ERREUR sur insert_text pour span {span.id}: {e}")
 
         self.debug_logger.info(f"Sauvegarde du PDF final vers : {output_path}")
         doc.save(output_path, garbage=4, deflate=True)
