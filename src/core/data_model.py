@@ -5,7 +5,7 @@ PDF Layout Translator - Modèle de Données
 Définit la structure des objets utilisés pour représenter une page PDF.
 """
 from dataclasses import dataclass, field
-from typing import List, Tuple
+from typing import List, Tuple, Optional
 
 @dataclass
 class FontInfo:
@@ -22,8 +22,9 @@ class TextSpan:
     font: FontInfo
     bbox: Tuple[float, float, float, float]
     translated_text: str = ""
-    # [JALON 2] Ajout d'un drapeau pour marquer un saut de ligne forcé après ce span.
     forces_line_break: bool = False
+    # <--- MODIFIÉ : Ajout de la BBox finale, calculée par le LayoutProcessor
+    final_bbox: Optional[Tuple[float, float, float, float]] = None
 
 @dataclass
 class Paragraph:
