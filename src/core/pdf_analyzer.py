@@ -2,7 +2,7 @@
 # -*- coding: utf-8 -*-
 """
 PDF Layout Translator - Analyseur de PDF
-*** VERSION FINALE ET STABILISÉE v1.5 - ANALYSE SPATIALE INTÉGRÉE ***
+*** VERSION FINALE ET STABILISÉE v1.6 - ANALYSE HEURISTIQUE AVANCÉE ***
 """
 import logging
 import re
@@ -21,7 +21,7 @@ class PDFAnalyzer:
         return re.sub(r"^[A-Z]{6}\+", "", font_name)
 
     def analyze_pdf(self, pdf_path: Path) -> List[PageObject]:
-        self.logger.info(f"Début de l'analyse architecturale (v1.5 - Analyse Spatiale) de {pdf_path}")
+        self.logger.info(f"Début de l'analyse architecturale (v1.6 - Heuristique Avancée) de {pdf_path}")
         doc = fitz.open(pdf_path)
         pages = []
 
@@ -56,8 +56,10 @@ class PDFAnalyzer:
                         )
                         
                         span_text = span_data['text'].replace('\t', '    ')
-                        if lines[line_key]['spans'] and span_data['bbox'][0] > (lines[line_key]['spans'][-1].bbox[2] + 0.5):
-                            span_text = " " + span_text
+                        # On préserve les espaces en début de span pour une analyse plus fine
+                        if lines[line_key]['spans'] and not lines[line_key]['spans'][-1].text.endswith(' '):
+                           if span_data['bbox'][0] > (lines[line_key]['spans'][-1].bbox[2] + 0.5):
+                                lines[line_key]['spans'][-1].text += " "
 
                         new_span = TextSpan(id=span_id, text=span_text, font=font_info, bbox=span_data['bbox'])
                         lines[line_key]['spans'].append(new_span)
@@ -68,52 +70,84 @@ class PDFAnalyzer:
                 current_paragraph_spans = []
                 para_counter = 1
                 for i, line in enumerate(sorted_lines):
+                    if not line['spans']: continue
+                    
                     current_paragraph_spans.extend(line['spans'])
+                    
+                    # --- DÉBUT DE LA LOGIQUE HEURISTIQUE AVANCÉE (v2.4) ---
+                    force_break = False
+                    reason = ""
                     
                     is_last_line_of_block = (i == len(sorted_lines) - 1)
                     
-                    force_break = False
                     if not is_last_line_of_block:
                         next_line = sorted_lines[i+1]
-                        next_starts_with_bullet = next_line['spans'][0].text.strip().startswith(('•', '-', '–')) if next_line['spans'] else False
-                        next_starts_with_number = re.match(r'^\s*\d+\.?', next_line['spans'][0].text.strip()) is not None if next_line['spans'] else False
+                        if not next_line['spans']: continue
+                        
+                        # Règle 1: Détection de Marqueurs de Liste
+                        next_starts_with_bullet = next_line['spans'][0].text.strip().startswith(('•', '-', '–'))
+                        next_starts_with_number = re.match(r'^\s*\d+\.?', next_line['spans'][0].text.strip())
                         if next_starts_with_bullet or next_starts_with_number:
                             force_break = True
+                            reason = "Nouvel item de liste"
+                        
+                        # Règle 2: Détection par Écart Vertical
                         if not force_break:
                             line_height = line['bbox'][3] - line['bbox'][1]
                             if line_height <= 0: line_height = 10 
                             vertical_gap = next_line['bbox'][1] - line['bbox'][3]
                             if vertical_gap > line_height * 0.4:
                                 force_break = True
+                                reason = f"Écart vertical large ({vertical_gap:.1f} > {line_height * 0.4:.1f})"
+
+                        # Règle 3: Détection par Changement de Style (simplifiée)
+                        if not force_break:
+                            last_span_style = current_paragraph_spans[-1].font
+                            next_span_style = next_line['spans'][0].font
+                            if last_span_style.name != next_span_style.name or abs(last_span_style.size - next_span_style.size) > 0.5:
+                                force_break = True
+                                reason = "Changement de police/taille"
+                        
+                        # Règle 4: Détection par Ponctuation Finale
+                        if not force_break:
+                            full_line_text = "".join(s.text for s in line['spans']).strip()
+                            if full_line_text.endswith(('.', '!', '?', ':')):
+                                force_break = True
+                                reason = "Ponctuation de fin de ligne"
                     
+                    if force_break:
+                        self.debug_logger.info(f"    - Paragraphe P{para_counter} terminé. Raison: {reason}.")
+                    # --- FIN DE LA LOGIQUE HEURISTIQUE ---
+
                     if is_last_line_of_block or force_break:
                         if current_paragraph_spans:
                             para_id = f"{block_id}_P{para_counter}"
                             paragraph = Paragraph(id=para_id, spans=list(current_paragraph_spans))
                             
-                            if current_paragraph_spans:
-                                first_span = current_paragraph_spans[0]
+                            # Logique de gestion des listes à puces (inchangée)
+                            if paragraph.spans:
+                                first_span = paragraph.spans[0]
                                 match = re.match(r'^(\s*[•\-–]\s*|\s*\d+\.?\s*)', first_span.text)
                                 if match:
                                     paragraph.is_list_item = True
                                     marker_end_pos = match.end()
                                     marker_text = first_span.text[:marker_end_pos]
                                     content_text = first_span.text[marker_end_pos:]
+                                    
                                     paragraph.list_marker_text = marker_text.strip()
                                     first_span.text = marker_text
                                     
-                                    if content_text:
+                                    if content_text.strip():
                                         new_span = copy.deepcopy(first_span)
                                         new_span.id = f"{first_span.id}_cont"
                                         new_span.text = content_text
                                         
-                                        marker_width_ratio = len(marker_text) / (len(first_span.text) + len(content_text)) if (len(first_span.text) + len(content_text)) > 0 else 0.5
+                                        marker_width_ratio = len(marker_text) / len(first_span.text) if len(first_span.text) > 0 else 0.5
                                         marker_width = (first_span.bbox[2] - first_span.bbox[0]) * marker_width_ratio
                                         
                                         new_bbox = list(first_span.bbox)
                                         new_bbox[0] = first_span.bbox[0] + marker_width
                                         new_span.bbox = tuple(new_bbox)
-                                        
                                         paragraph.spans.insert(1, new_span)
                                     
                                     if len(paragraph.spans) > 1:
@@ -129,7 +163,7 @@ class PDFAnalyzer:
                 if text_block.paragraphs:
                     page_obj.text_blocks.append(text_block)
 
-            # --- NOUVELLE ÉTAPE v2.2 : ANALYSE SPATIALE CONTEXTUELLE ---
+            # Analyse Spatiale Contextuelle (inchangée)
             self.debug_logger.info(f"  > Démarrage de l'analyse spatiale pour la page {page_num + 1}")
             for i, block in enumerate(page_obj.text_blocks):
                 right_boundary = page_dimensions[0]
