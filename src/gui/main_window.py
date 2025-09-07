@@ -455,10 +455,12 @@ class MainWindow:
                 self._set_processing(False)
         threading.Thread(target=thread_target, daemon=True).start()
 
+    # Dans la classe MainWindow
+
     def _load_dom_from_file(self, session_id: str, filename: str) -> List[PageObject]:
         session_dir = self.session_manager.get_session_directory(session_id)
         file_path = session_dir / filename
-        self.debug_logger.info(f"--- Démarrage de _load_dom_from_file (v2.1) pour '{filename}' ---")
+        self.debug_logger.info(f"--- Démarrage de _load_dom_from_file (v2.2 Robuste) pour '{filename}' ---")
         with open(file_path, 'r', encoding='utf-8') as f:
             data = json.load(f)
 
@@ -471,7 +473,6 @@ class MainWindow:
                     id=block_data['id'],
                     bbox=tuple(block_data['bbox']),
                     alignment=block_data.get('alignment', 0),
-                    # NOUVELLE LIGNE v2.2 : Charger la largeur disponible depuis le JSON.
                     available_width=block_data.get('available_width', 0.0)
                 )
 
@@ -480,6 +481,7 @@ class MainWindow:
                     block_obj.final_bbox = tuple(final_bbox_data)
 
                 if 'spans' in block_data and any(s.get('final_bbox') for s in block_data['spans']):
+                    # ... (partie inchangée)
                     self.debug_logger.info(f"  > Détection d'un format post-layout pour le bloc {block_obj.id}.")
                     for span_data in block_data['spans']:
                         font_info = FontInfo(**span_data['font'])
@@ -497,6 +499,13 @@ class MainWindow:
                 elif 'paragraphs' in block_data and block_data['paragraphs']:
                     self.debug_logger.info(f"  > Détection d'un format pré-layout pour le bloc {block_obj.id}.")
                     for para_data in block_data['paragraphs']:
+                        # --- DÉBUT CORRECTION v2.8 ---
+                        # On vérifie que le paragraphe a bien des spans avant de le créer
+                        if not para_data.get('spans', []):
+                            self.debug_logger.warning(f"    - Paragraphe JSON vide ignoré dans le bloc {block_obj.id}")
+                            continue
+                        # --- FIN CORRECTION v2.8 ---
+                            
                         para_obj = Paragraph(
                             id=para_data['id'],
                             is_list_item=para_data.get('is_list_item', False),
@@ -519,7 +528,7 @@ class MainWindow:
                 page_obj.text_blocks.append(block_obj)
 
             pages.append(page_obj)
-        self.debug_logger.info(f"--- Fin de _load_dom_from_file (corrigé v2.1) ---")
+        self.debug_logger.info(f"--- Fin de _load_dom_from_file (corrigé v2.2) ---")
         return pages
         
     def _open_session_folder(self):
@@ -548,6 +557,7 @@ class ToolTip:
     def hide_tooltip(self, event):
         if self.tooltip_window: self.tooltip_window.destroy()
         self.tooltip_window = None
+
 
 
 
