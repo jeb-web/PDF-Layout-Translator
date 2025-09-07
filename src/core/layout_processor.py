@@ -2,7 +2,7 @@
 # -*- coding: utf-8 -*-
 """
 PDF Layout Translator - Moteur de Mise en Page
-*** VERSION FINALE ET STABILISÉE v2.7 - MISE EN PAGE STRUCTURÉE (Gestion des <br>) ***
+*** VERSION STABLE v2.8 - CORRECTION DES PARAGRAPHES VIDES ***
 """
 import logging
 import re
@@ -30,7 +30,7 @@ class LayoutProcessor:
         return len(text) * font_size * 0.6
 
     def process_pages(self, pages: List[PageObject]) -> List[PageObject]:
-        self.debug_logger.info("--- DÉMARRAGE LAYOUTPROCESSOR (v2.7 - Mise en Page Structurée) ---")
+        self.debug_logger.info("--- DÉMARRAGE LAYOUTPROCESSOR (v2.8 - Robuste) ---")
         for page in pages:
             self.debug_logger.info(f"  > Traitement de la Page {page.page_number}")
             for block in page.text_blocks:
@@ -39,17 +39,18 @@ class LayoutProcessor:
                 all_new_spans_for_block = []
                 current_y = block.bbox[1]
                 
-                # --- ÉTAPE 1 (v2.7) : DÉCISION DE LARGEUR GLOBALE POUR LE BLOC ---
-                # On calcule la largeur maximale requise par le paragraphe le plus exigeant.
+                # Étape 1 : Évaluation de la largeur maximale requise pour le bloc
                 max_ideal_width = 0
                 original_block_width = block.bbox[2] - block.bbox[0]
 
                 for para in block.paragraphs:
+                    if not para.spans:
+                        continue
+                        
                     full_para_text = "".join([span.text for span in para.spans])
                     lines = full_para_text.split('\n')
                     for line_text in lines:
-                        if not para.spans or not line_text.strip(): continue
-                        # On mesure la largeur avec la police du premier span du paragraphe comme référence
+                        if not line_text.strip(): continue
                         representative_span = para.spans[0]
                         line_width = self._get_text_width(line_text, representative_span.font.name, representative_span.font.size)
                         if line_width > max_ideal_width:
@@ -57,8 +58,8 @@ class LayoutProcessor:
                 
                 max_available_width = block.available_width if block.available_width > 5 else original_block_width
                 
-                self.debug_logger.info(f"       [Layout v2.7 - Évaluation Globale] Largeur originale={original_block_width:.1f}, "
-                                       f"Largeur maximale requise={max_ideal_width:.1f}, "
+                self.debug_logger.info(f"       [Layout - Évaluation Globale] Largeur originale={original_block_width:.1f}, "
+                                       f"Largeur max requise={max_ideal_width:.1f}, "
                                        f"Largeur max disponible={max_available_width:.1f}")
 
                 block_width_for_reflow = original_block_width
@@ -72,23 +73,22 @@ class LayoutProcessor:
                 else:
                     self.debug_logger.info("       [Layout Decision] Le texte tient dans la boîte originale. Pas de changement global.")
 
-                # --- ÉTAPE 2 (v2.7) : MISE EN PAGE PARAGRAPHE PAR PARAGRAPHE ---
+                # Étape 2 : Mise en page paragraphe par paragraphe avec la largeur décidée
                 for para in block.paragraphs:
-                    self.debug_logger.info(f"       - Traitement du paragraphe {para.id} (Liste: {para.is_list_item})")
                     if not para.spans:
+                        self.debug_logger.warning(f"       [Layout v2.8] Paragraphe {para.id} ignoré car il ne contient aucun span.")
                         continue
+
+                    self.debug_logger.info(f"       - Traitement du paragraphe {para.id}")
                     
-                    # On regroupe tous les mots et spans du paragraphe
                     all_words_info = []
                     for span in para.spans:
                         if span.text:
-                            # On scinde par les espaces ET les retours à la ligne pour préserver leur position
                             words_and_breaks = re.split(r'(\s+)', span.text)
                             for item in words_and_breaks:
                                 if item:
                                     all_words_info.append((item, span))
 
-                    # On traite les mots ligne par ligne, en se basant sur les '\n'
                     x_start = block.bbox[0]
                     current_x = x_start
                     x_text_start = x_start
@@ -101,7 +101,6 @@ class LayoutProcessor:
                             current_y += max_font_size_in_line * 1.2
                             current_x = x_text_start
                             is_first_word_of_line = True
-                            # Si le mot contient du texte en plus du \n, on le traite après le saut
                             word = word.replace('\n', '')
                             if not word: continue
 
@@ -124,10 +123,8 @@ class LayoutProcessor:
                         all_new_spans_for_block.append(new_span)
                         
                         current_x += word_width
-                        # On ne considère plus les espaces comme séparateurs de mots pour cette logique
                         is_first_word_of_line = False if word.strip() else is_first_word_of_line
                     
-                    # On ajoute un espacement après chaque paragraphe (qui peut contenir plusieurs lignes via \n)
                     current_y += max_font_size_in_line * 1.2
 
                 block.spans = all_new_spans_for_block
@@ -135,4 +132,126 @@ class LayoutProcessor:
                 block.final_bbox = (block.bbox[0], block.bbox[1], block.bbox[2], block.bbox[1] + final_height)
 
         self.debug_logger.info("--- FIN LAYOUTPROCESSOR ---")
+        return pages```
+
+---
+
+### Fichier 2/2 : `main_window.py` (Version stable)
+
+```python
+#!/usr/bin/env python3
+# -*- coding: utf-8 -*-
+"""
+PDF Layout Translator - Fenêtre principale
+*** VERSION STABLE v2.5.1-hotfix ***
+"""
+import tkinter as tk
+from tkinter import ttk, filedialog, messagebox, scrolledtext
+import threading
+import logging
+from pathlib import Path
+import json
+import os
+from dataclasses import asdict
+from lxml import etree
+import copy
+from typing import List, Dict
+
+from core.session_manager import SessionManager
+from core.pdf_analyzer import PDFAnalyzer
+from core.text_extractor import TextExtractor
+from core.translation_parser import TranslationParser
+from core.auto_translator import AutoTranslator, GOOGLETRANS_AVAILABLE
+from utils.font_manager import FontManager
+from core.layout_processor import LayoutProcessor
+from core.pdf_reconstructor import PDFReconstructor
+from core.data_model import PageObject, TextBlock, TextSpan, FontInfo, Paragraph
+from gui.font_dialog import FontDialog
+
+class MainWindow:
+    def __init__(self, root: tk.Tk, config_manager):
+        self.root = root
+        self.config_manager = config_manager
+        self.logger = logging.getLogger(__name__)
+        self.debug_logger = logging.getLogger('debug_trace')
+        
+        self.session_manager = None
+        self.font_manager = None
+        self.pdf_analyzer = None
+        # ... (le reste du code est identique à la version saine que je vous ai fournie précédemment)
+        # Je vais juste m'assurer que la fonction _load_dom_from_file est la bonne version robuste.
+
+# ... [TOUT LE CODE DE LA CLASSE MainWindow RESTE INCHANGÉ JUSQU'À CETTE FONCTION] ...
+
+    def _load_dom_from_file(self, session_id: str, filename: str) -> List[PageObject]:
+        session_dir = self.session_manager.get_session_directory(session_id)
+        file_path = session_dir / filename
+        self.debug_logger.info(f"--- Démarrage de _load_dom_from_file (v2.2 Robuste) pour '{filename}' ---")
+        with open(file_path, 'r', encoding='utf-8') as f:
+            data = json.load(f)
+
+        pages = []
+        for page_data in data:
+            page_obj = PageObject(page_number=page_data['page_number'], dimensions=tuple(page_data['dimensions']))
+
+            for block_data in page_data.get('text_blocks', []):
+                block_obj = TextBlock(
+                    id=block_data['id'],
+                    bbox=tuple(block_data['bbox']),
+                    alignment=block_data.get('alignment', 0),
+                    available_width=block_data.get('available_width', 0.0)
+                )
+
+                final_bbox_data = block_data.get('final_bbox')
+                if final_bbox_data:
+                    block_obj.final_bbox = tuple(final_bbox_data)
+
+                if 'spans' in block_data and any(s.get('final_bbox') for s in block_data['spans']):
+                    self.debug_logger.info(f"  > Détection d'un format post-layout pour le bloc {block_obj.id}.")
+                    for span_data in block_data['spans']:
+                        if not span_data.get('font'): continue
+                        font_info = FontInfo(**span_data['font'])
+                        span_obj = TextSpan(
+                            id=span_data['id'],
+                            text=span_data['text'],
+                            bbox=tuple(span_data['bbox']),
+                            font=font_info
+                        )
+                        span_final_bbox_data = span_data.get('final_bbox')
+                        if span_final_bbox_data:
+                            span_obj.final_bbox = tuple(span_final_bbox_data)
+                        block_obj.spans.append(span_obj)
+                
+                elif 'paragraphs' in block_data and block_data['paragraphs']:
+                    self.debug_logger.info(f"  > Détection d'un format pré-layout pour le bloc {block_obj.id}.")
+                    for para_data in block_data['paragraphs']:
+                        if not para_data.get('spans', []):
+                            self.debug_logger.warning(f"    - Paragraphe JSON vide ignoré dans le bloc {block_obj.id}")
+                            continue
+                            
+                        para_obj = Paragraph(
+                            id=para_data['id'],
+                            is_list_item=para_data.get('is_list_item', False),
+                            list_marker_text=para_data.get('list_marker_text', ""),
+                            text_indent=para_data.get('text_indent', 0.0)
+                        )
+                        for span_data in para_data.get('spans', []):
+                            font_info = FontInfo(**span_data['font'])
+                            span_obj = TextSpan(
+                                id=span_data['id'],
+                                text=span_data['text'],
+                                bbox=tuple(span_data['bbox']),
+                                font=font_info
+                            )
+                            para_obj.spans.append(span_obj)
+                        block_obj.paragraphs.append(para_obj)
+                    
+                    block_obj.spans = [span for para in block_obj.paragraphs for span in para.spans]
+
+                page_obj.text_blocks.append(block_obj)
+
+            pages.append(page_obj)
+        self.debug_logger.info(f"--- Fin de _load_dom_from_file (corrigé v2.2) ---")
         return pages
+        
+# ... [LE RESTE DE LA CLASSE MainWindow RESTE INCHANGÉ] ...
