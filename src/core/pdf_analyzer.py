@@ -2,33 +2,30 @@
 # -*- coding: utf-8 -*-
 """
 PDF Layout Translator - Analyseur de PDF
-*** NOUVELLE VERSION v1.3 - CORRECTION IMPORT ET TRACES DÉTAILLÉES ***
+*** VERSION FINALE ET STABILISÉE v1.4 - SÉPARATION ROBUSTE PUCE/TEXTE ***
 """
 import logging
 import re
 from pathlib import Path
 from typing import List
 import fitz
-import copy  # <--- CORRECTION : Ajout de l'import manquant
+import copy
 from core.data_model import PageObject, TextBlock, TextSpan, FontInfo, Paragraph
 
 class PDFAnalyzer:
     def __init__(self):
         self.logger = logging.getLogger(__name__)
-        # --- AJOUT : S'assurer que le debug_logger est disponible ---
         self.debug_logger = logging.getLogger('debug_trace')
 
     def _normalize_font_name(self, font_name: str) -> str:
-        # ... (inchangé) ...
         return re.sub(r"^[A-Z]{6}\+", "", font_name)
 
     def analyze_pdf(self, pdf_path: Path) -> List[PageObject]:
-        self.logger.info(f"Début de l'analyse architecturale (v1.3 - Détection de puce corrigée) de {pdf_path}")
+        self.logger.info(f"Début de l'analyse architecturale (v1.4 - Séparation robuste) de {pdf_path}")
         doc = fitz.open(pdf_path)
         pages = []
 
         for page_num, page in enumerate(doc):
-            # ... (logique de début inchangée) ...
             page_dimensions = (page.rect.width, page.rect.height)
             page_obj = PageObject(page_number=page_num + 1, dimensions=page_dimensions)
             
@@ -36,10 +33,8 @@ class PDFAnalyzer:
             
             block_counter = 0
             for block_data in sorted([b for b in blocks_data if b['type'] == 0], key=lambda b: (b['bbox'][1], b['bbox'][0])):
-                # ... (logique de création de spans inchangée) ...
                 block_counter += 1
                 block_id = f"P{page_num+1}_B{block_counter}"
-                
                 text_block = TextBlock(id=block_id, bbox=block_data['bbox'])
                 
                 lines = {}
@@ -80,7 +75,6 @@ class PDFAnalyzer:
                     force_break = False
                     if not is_last_line_of_block:
                         next_line = sorted_lines[i+1]
-                        # ... (logique de détection de fin de paragraphe inchangée) ...
                         next_starts_with_bullet = next_line['spans'][0].text.strip().startswith(('•', '-', '–')) if next_line['spans'] else False
                         next_starts_with_number = re.match(r'^\s*\d+\.?', next_line['spans'][0].text.strip()) is not None if next_line['spans'] else False
                         if next_starts_with_bullet or next_starts_with_number:
@@ -95,7 +89,7 @@ class PDFAnalyzer:
                     if is_last_line_of_block or force_break:
                         if current_paragraph_spans:
                             para_id = f"{block_id}_P{para_counter}"
-                            paragraph = Paragraph(id=para_id, spans=current_paragraph_spans)
+                            paragraph = Paragraph(id=para_id, spans=list(current_paragraph_spans))
                             
                             if current_paragraph_spans:
                                 first_span = current_paragraph_spans[0]
@@ -105,31 +99,33 @@ class PDFAnalyzer:
                                     self.debug_logger.info(f"    > Span original: '{first_span.text}'")
                                     paragraph.is_list_item = True
                                     
-                                    marker_text = match.group(1)
+                                    marker_end_pos = match.end()
+                                    marker_text = first_span.text[:marker_end_pos]
+                                    content_text = first_span.text[marker_end_pos:]
+                                    
                                     paragraph.list_marker_text = marker_text.strip()
                                     self.debug_logger.info(f"    > Marqueur identifié: '{marker_text.strip()}'")
-
-                                    content_text = first_span.text[len(marker_text):]
+                                    
                                     first_span.text = marker_text
                                     
                                     if content_text:
-                                        self.debug_logger.info(f"    > Contenu restant dans le span: '{content_text}'")
+                                        self.debug_logger.info(f"    > Contenu restant: '{content_text}'")
                                         new_span = copy.deepcopy(first_span)
                                         new_span.id = f"{first_span.id}_cont"
                                         new_span.text = content_text
                                         
-                                        marker_width_ratio = len(marker_text) / (len(marker_text) + len(content_text))
+                                        marker_width_ratio = len(marker_text) / (len(first_span.text) + len(content_text)) if (len(first_span.text) + len(content_text)) > 0 else 0.5
                                         marker_width = (first_span.bbox[2] - first_span.bbox[0]) * marker_width_ratio
                                         
                                         new_bbox = list(first_span.bbox)
                                         new_bbox[0] = first_span.bbox[0] + marker_width
                                         new_span.bbox = tuple(new_bbox)
                                         
-                                        current_paragraph_spans.insert(1, new_span)
-                                        self.debug_logger.info(f"    > Nouveau span créé pour le contenu avec l'ID {new_span.id}")
+                                        paragraph.spans.insert(1, new_span)
+                                        self.debug_logger.info(f"    > Nouveau span créé (ID {new_span.id}) et inséré.")
                                     
-                                    if len(current_paragraph_spans) > 1:
-                                        paragraph.text_indent = current_paragraph_spans[1].bbox[0]
+                                    if len(paragraph.spans) > 1:
+                                        paragraph.text_indent = paragraph.spans[1].bbox[0]
                                         self.debug_logger.info(f"    > Indentation calculée à partir du span suivant: {paragraph.text_indent:.2f}")
                                     else:
                                         paragraph.text_indent = first_span.bbox[0] + (first_span.font.size * 2)
@@ -137,7 +133,7 @@ class PDFAnalyzer:
 
                             text_block.paragraphs.append(paragraph)
                             para_counter += 1
-                            current_paragraph_spans = []
+                            current_paragraph_spans.clear()
                 
                 text_block.spans = [span for para in text_block.paragraphs for span in para.spans]
                 if text_block.paragraphs:
