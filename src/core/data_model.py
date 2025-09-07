@@ -2,7 +2,7 @@
 # -*- coding: utf-8 -*-
 """
 PDF Layout Translator - Modèle de Données
-Définit la structure des objets utilisés pour représenter une page PDF.
+*** VERSION FINALE ET STABILISÉE v1.2 ***
 """
 from dataclasses import dataclass, field
 from typing import List, Tuple, Optional
@@ -29,10 +29,9 @@ class TextSpan:
 class Paragraph:
     id: str
     spans: List[TextSpan] = field(default_factory=list)
-    # <--- AJOUTS : Champs pour gérer la mise en page des listes
     is_list_item: bool = False
-    list_marker_text: str = ""  # Le texte de la puce (ex: "•", "1.", "A)")
-    text_indent: float = 0.0      # La position X de départ du texte après la puce
+    list_marker_text: str = ""
+    text_indent: float = 0.0
 
 @dataclass
 class TextBlock:
