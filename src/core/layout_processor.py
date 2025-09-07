@@ -2,7 +2,7 @@
 # -*- coding: utf-8 -*-
 """
 PDF Layout Translator - Moteur de Mise en Page
-*** NOUVELLE VERSION v2.2 - GESTION DU HANGING INDENT POUR LES LISTES ***
+*** NOUVELLE VERSION v2.3 - Robuste et Structuré par Paragraphe ***
 """
 import logging
 from typing import List
@@ -30,51 +30,46 @@ class LayoutProcessor:
         return len(text) * font_size * 0.6
 
     def process_pages(self, pages: List[PageObject]) -> List[PageObject]:
-        self.debug_logger.info("--- DÉMARRAGE LAYOUTPROCESSOR (v2.2 - Hanging Indent) ---")
+        self.debug_logger.info("--- DÉMARRAGE LAYOUTPROCESSOR (v2.3 - Robuste) ---")
         for page in pages:
             self.debug_logger.info(f"  > Traitement de la Page {page.page_number}")
             for block in page.text_blocks:
                 self.debug_logger.info(f"    -> Calcul du reflow pour le bloc {block.id}")
                 
-                # --- NOUVELLE LOGIQUE PAR PARAGRAPHE ---
                 all_new_spans_for_block = []
-                current_y = block.bbox[1] # Y vertical pour le bloc entier
+                # Le Y de départ est le haut du bloc. Chaque paragraphe le fera avancer.
+                current_y = block.bbox[1]
                 
                 for para in block.paragraphs:
-                    self.debug_logger.info(f"       - Traitement du paragraphe {para.id} (Est-ce une liste? {para.is_list_item})")
+                    self.debug_logger.info(f"       - Traitement du paragraphe {para.id} (Liste: {para.is_list_item})")
                     if not para.spans:
                         continue
 
                     x_start = block.bbox[0]
                     block_width = block.bbox[2] - x_start
                     
-                    x_text_start = x_start  # Par défaut, le texte commence au début du bloc
-                    max_font_size_in_line = para.spans[0].font.size if para.spans else 10.0
+                    x_text_start = x_start
+                    max_font_size_in_line = para.spans[0].font.size
                     
-                    # Si c'est un item de liste, on gère la puce et l'indentation
+                    content_spans = para.spans
+                    
                     if para.is_list_item:
                         marker_span = para.spans[0]
                         marker_width = self._get_text_width(marker_span.text, marker_span.font.name, marker_span.font.size)
                         
-                        # Placer la puce
                         new_marker_span = copy.deepcopy(marker_span)
                         new_marker_span.final_bbox = (x_start, current_y, x_start + marker_width, current_y + marker_span.font.size * 1.2)
                         all_new_spans_for_block.append(new_marker_span)
                         
-                        # L'indentation du texte est relative au début du bloc
-                        x_text_start = para.text_indent 
+                        x_text_start = para.text_indent
                         current_x = x_text_start
-                        
-                        # Le reste des spans constitue le contenu de l'item de liste
                         content_spans = para.spans[1:]
-                        self.debug_logger.info(f"         > Item de liste détecté. Marqueur: '{marker_span.text}'. Indentation du texte à X={x_text_start:.2f}")
+                        self.debug_logger.info(f"         > Item de liste. Marqueur: '{marker_span.text}'. Indentation du texte à X={x_text_start:.2f}")
 
                     else:
-                        # Paragraphe normal
                         current_x = x_start
-                        content_spans = para.spans
                     
-                    # Traitement des mots du contenu
+                    # --- CORRECTION : Réinitialiser la liste de mots pour chaque paragraphe ---
                     all_words = []
                     for span in content_spans:
                         if span.text:
@@ -87,7 +82,7 @@ class LayoutProcessor:
                         if not word: continue
                         if word == '<LINE_BREAK>':
                             current_y += max_font_size_in_line * 1.2
-                            current_x = x_text_start # Retour à la ligne indenté
+                            current_x = x_text_start
                             max_font_size_in_line = span.font.size
                             continue
 
@@ -97,7 +92,7 @@ class LayoutProcessor:
 
                         if current_x + word_width > x_start + block_width and current_x > x_text_start:
                             current_y += max_font_size_in_line * 1.2
-                            current_x = x_text_start # Retour à la ligne indenté
+                            current_x = x_text_start
                             max_font_size_in_line = span.font.size
 
                         if span.font.size > max_font_size_in_line:
@@ -109,11 +104,10 @@ class LayoutProcessor:
                         all_new_spans_for_block.append(new_span)
                         current_x += word_width
                     
-                    # Avancer le Y pour le prochain paragraphe
                     current_y += max_font_size_in_line * 1.2
 
                 block.spans = all_new_spans_for_block
-                final_height = current_y - block.bbox[1] if all_new_spans_for_block else 0
+                final_height = (current_y - block.bbox[1]) if all_new_spans_for_block else 0
                 block.final_bbox = (block.bbox[0], block.bbox[1], block.bbox[2], block.bbox[1] + final_height)
                 self.debug_logger.info(f"    <- Fin du bloc {block.id}. Nouvelle hauteur: {final_height:.2f}px.")
 
