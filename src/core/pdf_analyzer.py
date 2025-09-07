@@ -72,6 +72,7 @@ class PDFAnalyzer:
         pages = []
 
         for page_num, page in enumerate(doc):
+            self.debug_logger.info(f"--- Analyse de la Page {page_num + 1} ---")
             page_dimensions = (page.rect.width, page.rect.height)
             page_obj = PageObject(page_number=page_num + 1, dimensions=page_dimensions)
             blocks_data = page.get_text("dict", flags=fitz.TEXTFLAGS_DICT)["blocks"]
@@ -81,6 +82,8 @@ class PDFAnalyzer:
             for block_data in sorted([b for b in blocks_data if b['type'] == 0], key=lambda b: (b['bbox'][1], b['bbox'][0])):
                 block_counter += 1
                 block_id = f"P{page_num+1}_B{block_counter}"
+                self.debug_logger.info(f"  - Traitement du bloc brut {block_id}")
+                
                 text_block = TextBlock(id=block_id, bbox=block_data['bbox'])
                 
                 lines = {}
@@ -110,6 +113,7 @@ class PDFAnalyzer:
                     is_last_line_of_block = (i == len(sorted_lines) - 1)
                     
                     force_break = False
+                    reason = ""
                     if not is_last_line_of_block:
                         next_line = sorted_lines[i+1]
                         if not next_line['spans']: continue
@@ -118,26 +122,28 @@ class PDFAnalyzer:
                         line_height = line['bbox'][3] - line['bbox'][1]
                         if line_height <= 0: line_height = 10 
                         vertical_gap = next_line['bbox'][1] - line['bbox'][3]
-
+                        
                         next_starts_with_bullet = next_line['spans'][0].text.strip().startswith(('•', '-', '–'))
                         next_starts_with_number = re.match(r'^\s*\d+\.?', next_line['spans'][0].text.strip())
 
                         if next_starts_with_bullet or next_starts_with_number:
-                            force_break = True
+                            force_break = True; reason = "Nouvel item de liste"
                         elif vertical_gap > line_height * 0.45:
-                            force_break = True
+                            force_break = True; reason = "Écart vertical large"
                         elif full_line_text.endswith(('.', '!', '?', ':')):
-                            force_break = True
+                            force_break = True; reason = "Ponctuation de fin de ligne"
                     
                     if is_last_line_of_block or force_break:
                         if current_paragraph_spans:
                             para_id = f"{block_id}_P{para_counter}"
+                            self.debug_logger.info(f"    * Création du Paragraphe {para_id}. Raison de la rupture: {'Fin de bloc' if not reason else reason}")
                             paragraph = Paragraph(id=para_id, spans=list(current_paragraph_spans))
                             
                             if paragraph.spans:
                                 first_span = paragraph.spans[0]
                                 match = re.match(r'^(\s*[•\-–]\s*|\s*\d+\.?\s*)', first_span.text)
                                 if match:
+                                    self.debug_logger.info(f"      -> Détection et scission d'item de liste pour le span {first_span.id}")
                                     paragraph.is_list_item = True
                                     marker_end_pos = match.end()
                                     marker_text = first_span.text[:marker_end_pos]
@@ -154,6 +160,7 @@ class PDFAnalyzer:
                                         new_bbox[0] = first_span.bbox[0] + marker_width
                                         new_span.bbox = tuple(new_bbox)
                                         paragraph.spans.insert(1, new_span)
+                                        self.debug_logger.info(f"         -> Span de contenu '{new_span.id}' créé.")
                                     if len(para.spans) > 1:
                                         paragraph.text_indent = para.spans[1].bbox[0]
                                     else:
@@ -181,7 +188,7 @@ class PDFAnalyzer:
                             closest_neighbor_x = min(closest_neighbor_x, other_block.bbox[0])
                 block.available_width = closest_neighbor_x - block.bbox[0]
                 original_width = block.bbox[2] - block.bbox[0]
-                self.debug_logger.info(f"    - Bloc {block.id}: Largeur originale={original_width:.1f}, "
+                self.debug_logger.info(f"    - Bloc unifié {block.id}: Largeur originale={original_width:.1f}, "
                                        f"Largeur max disponible={block.available_width:.1f} "
                                        f"(limité par {'voisin' if closest_neighbor_x != right_boundary else 'marge'})")
             pages.append(page_obj)
