@@ -20,11 +20,17 @@ class PDFAnalyzer:
     def _normalize_font_name(self, font_name: str) -> str:
         return re.sub(r"^[A-Z]{6}\+", "", font_name)
 
-    # --- NOUVEAU v2.5 ---
-    # Méthode helper pour décider si deux blocs doivent être fusionnés
+    # --- NOUVEAU v2.5.1 ---
+    # Méthode helper pour décider si deux blocs doivent être fusionnés (version robustifiée)
     def _should_merge(self, block_a: TextBlock, block_b: TextBlock) -> Tuple[bool, str]:
-        if not block_a.paragraphs or not block_b.paragraphs:
-            return False, "Bloc vide"
+        # Vérification de robustesse : s'assurer que les blocs et leurs paragraphes/spans ne sont pas vides
+        if not all([
+            block_a.paragraphs,
+            block_a.paragraphs[-1].spans,
+            block_b.paragraphs,
+            block_b.paragraphs[0].spans
+        ]):
+            return False, "Bloc ou paragraphe vide, fusion impossible"
             
         last_span_a = block_a.paragraphs[-1].spans[-1]
         first_span_b = block_b.paragraphs[0].spans[0]
@@ -192,3 +198,4 @@ class PDFAnalyzer:
             pages.append(page_obj)
         doc.close()
         return pages
+
