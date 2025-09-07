@@ -2,7 +2,7 @@
 # -*- coding: utf-8 -*-
 """
 PDF Layout Translator - Analyseur de PDF
-*** VERSION FINALE ET STABILISÉE v2.0 - LOGIQUE UNIFIÉE ***
+*** VERSION FINALE ET STABILISÉE v2.0.1 - CORRECTIF CRITIQUE ***
 """
 import logging
 import re
@@ -67,7 +67,7 @@ class PDFAnalyzer:
         return unified_blocks
 
     def analyze_pdf(self, pdf_path: Path) -> List[PageObject]:
-        self.logger.info(f"Début de l'analyse architecturale (v2.0 - Logique Unifiée) de {pdf_path}")
+        self.logger.info(f"Début de l'analyse architecturale (v2.0.1 - Logique Unifiée) de {pdf_path}")
         doc = fitz.open(pdf_path)
         pages = []
 
@@ -83,7 +83,6 @@ class PDFAnalyzer:
                 block_counter += 1
                 block_id = f"P{page_num+1}_B{block_counter}"
                 self.debug_logger.info(f"  - Traitement du bloc brut {block_id}")
-                
                 text_block = TextBlock(id=block_id, bbox=block_data['bbox'])
                 
                 lines = {}
@@ -117,15 +116,12 @@ class PDFAnalyzer:
                     if not is_last_line_of_block:
                         next_line = sorted_lines[i+1]
                         if not next_line['spans']: continue
-                        
                         full_line_text = "".join(s.text for s in line['spans']).strip()
                         line_height = line['bbox'][3] - line['bbox'][1]
                         if line_height <= 0: line_height = 10 
                         vertical_gap = next_line['bbox'][1] - line['bbox'][3]
-                        
                         next_starts_with_bullet = next_line['spans'][0].text.strip().startswith(('•', '-', '–'))
                         next_starts_with_number = re.match(r'^\s*\d+\.?', next_line['spans'][0].text.strip())
-
                         if next_starts_with_bullet or next_starts_with_number:
                             force_break = True; reason = "Nouvel item de liste"
                         elif vertical_gap > line_height * 0.45:
@@ -161,10 +157,12 @@ class PDFAnalyzer:
                                         new_span.bbox = tuple(new_bbox)
                                         paragraph.spans.insert(1, new_span)
                                         self.debug_logger.info(f"         -> Span de contenu '{new_span.id}' créé.")
-                                    if len(para.spans) > 1:
-                                        paragraph.text_indent = para.spans[1].bbox[0]
+                                    # --- DÉBUT CORRECTION CRITIQUE ---
+                                    if len(paragraph.spans) > 1: # On utilise la variable 'paragraph' et non 'para'
+                                        paragraph.text_indent = paragraph.spans[1].bbox[0]
                                     else:
                                         paragraph.text_indent = first_span.bbox[0] + (first_span.font.size * 2)
+                                    # --- FIN CORRECTION CRITIQUE ---
                             
                             text_block.paragraphs.append(paragraph)
                             para_counter += 1
