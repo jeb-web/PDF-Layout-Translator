@@ -2,7 +2,7 @@
 # -*- coding: utf-8 -*-
 """
 PDF Layout Translator - Moteur de Mise en Page
-*** NOUVELLE VERSION v2.5 - LOGIQUE DE TRAITEMENT FIABILISÉE ***
+*** VERSION FINALE ET STABILISÉE v2.5 - SÉPARATION PUCE/TEXTE INTÉGRÉE ***
 """
 import logging
 import re
@@ -19,7 +19,6 @@ class LayoutProcessor:
         self.font_manager = font_manager
 
     def _get_text_width(self, text: str, font_name: str, font_size: float) -> float:
-        # ... (inchangé) ...
         font_path = self.font_manager.get_replacement_font_path(font_name)
         if font_path and font_path.exists():
             try:
@@ -53,38 +52,37 @@ class LayoutProcessor:
                     
                     spans_to_process = list(para.spans)
                     
-                    # --- NOUVELLE LOGIQUE DE PRÉPARATION ---
-                    # On prépare une liste unique de tous les mots à traiter pour ce paragraphe.
                     all_words_info = []
 
                     if para.is_list_item and spans_to_process:
-                        first_span = spans_to_process.pop(0) # On retire le premier span
+                        first_span = spans_to_process.pop(0) 
                         match = re.match(r'^(\s*[•\-–]\s*|\s*\d+\.?\s*)', first_span.text)
                         if match:
+                            self.debug_logger.info(f"         > Application de la logique de liste sur le texte traduit: '{first_span.text[:30]}...'")
                             marker_end_pos = match.end()
                             marker_text = first_span.text[:marker_end_pos]
                             content_text = first_span.text[marker_end_pos:]
                             
-                            self.debug_logger.info(f"         > Logique de liste appliquée. Marqueur: '{marker_text.strip()}'")
-                            
-                            # Ajouter le marqueur à la liste des mots (avec un flag spécial)
                             all_words_info.append((marker_text, first_span, 'marker'))
                             
-                            # Ajouter le reste du texte du premier span
                             if content_text:
                                 all_words_info.extend([(word, first_span, 'content') for word in content_text.split(' ') if word])
                     
-                    # Ajouter les mots des spans restants
                     for span in spans_to_process:
                         if span.text:
                             all_words_info.extend([(word, span, 'content') for word in span.text.split(' ') if word])
 
-                    # --- BOUCLE DE MISE EN PAGE UNIQUE ET FIABLE ---
                     is_first_word_of_line = True
                     for i, (word, span, word_type) in enumerate(all_words_info):
                         is_last_word = (i == len(all_words_info) - 1)
                         word_with_space = word if is_last_word else word + ' '
                         
+                        if '\n' in word_with_space:
+                            current_y += max_font_size_in_line * 1.2
+                            current_x = x_text_start
+                            is_first_word_of_line = True
+                            continue
+
                         if word_type == 'marker':
                             x_text_start = para.text_indent
                             current_x = x_start
@@ -107,8 +105,6 @@ class LayoutProcessor:
                         new_span.text = word_with_space
                         new_span.final_bbox = (current_x, current_y, current_x + word_width, current_y + line_height)
                         all_new_spans_for_block.append(new_span)
-                        
-                        self.debug_logger.info(f"           > Mot '{word}' ({word_type}) positionné à bbox: {tuple(f'{c:.2f}' for c in new_span.final_bbox)}")
                         
                         current_x += word_width
                         is_first_word_of_line = False
