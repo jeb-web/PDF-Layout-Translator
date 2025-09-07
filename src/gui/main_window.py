@@ -337,23 +337,21 @@ class MainWindow:
                 self._set_processing(False)
         threading.Thread(target=thread_target, daemon=True).start()
 
-# Dans src/gui/main_window.py, méthode _process_layout
-
     def _process_layout(self):
         def thread_target():
             self._set_processing(True, "Calcul de la mise en page...")
             try:
                 session_dir = self.session_manager.get_session_directory(self.current_session_id)
+                
                 page_objects = self._load_dom_from_file(self.current_session_id, "1_dom_analysis.json")
+                
                 with open(session_dir / "4_parsed_translations.json", "r", encoding="utf-8") as f:
                     translations = json.load(f)
                 
-                # --- CORRECTION : Appeler la méthode qui injecte les traductions ---
                 self.debug_logger.info("Injection des traductions dans le DOM avant le layout...")
-                render_version = self._prepare_render_version(page_objects, translations)
+                self._prepare_render_version(page_objects, translations) # Modifie 'page_objects' sur place
                 
-                # --- PASSER LA VERSION TRADUITE au LayoutProcessor ---
-                final_pages = self.layout_processor.process_pages(render_version)
+                final_pages = self.layout_processor.process_pages(page_objects)
                 
                 with open(session_dir / "5_final_layout.json", "w", encoding="utf-8") as f: 
                     json.dump([asdict(p) for p in final_pages], f, indent=2)
@@ -371,58 +369,45 @@ class MainWindow:
                 self._set_processing(False)
         threading.Thread(target=thread_target, daemon=True).start()
 
-    def _prepare_render_version(self, pages: List[PageObject], translations: Dict[str, str]) -> List[PageObject]:
+    def _prepare_render_version(self, pages: List[PageObject], translations: Dict[str, str]) -> None:
         """
-        Applique les traductions HTML aux objets TextSpan correspondants,
-        en respectant la structure des spans.
+        Applique les traductions HTML aux objets TextSpan correspondants.
+        MODIFIE LES OBJETS 'pages' DIRECTEMENT EN MÉMOIRE.
         """
-        self.debug_logger.info("--- Démarrage de _prepare_render_version (v2 - Logique de mapping) ---")
+        self.debug_logger.info("--- Démarrage de _prepare_render_version (v3.1 - Modification directe) ---")
         from lxml import etree
-
-        # Créer une copie profonde pour éviter de modifier l'original en cas d'erreur
-        pages_copy = copy.deepcopy(pages)
         
-        # 1. Créer un dictionnaire plat de tous les spans, indexés par leur ID.
         span_map = {
             span.id: span 
-            for page in pages_copy 
+            for page in pages 
             for block in page.text_blocks 
             for para in block.paragraphs 
             for span in para.spans
         }
         self.debug_logger.info(f"  > {len(span_map)} spans au total trouvés dans le DOM.")
 
-        # 2. Vider le texte de tous les spans pour commencer proprement.
-        # Cela évite de garder du texte original si un span n'est pas trouvé dans la traduction.
         for span in span_map.values():
             span.text = ""
 
-        # 3. Parcourir les traductions paragraphe par paragraphe.
         for para_id, translated_html in translations.items():
             if not translated_html or not translated_html.strip():
                 continue
 
             try:
-                # Nettoyer le HTML s'il est encapsulé dans CDATA
                 if translated_html.strip().startswith('<![CDATA['):
                     translated_html = translated_html.strip()[9:-3]
                 
-                # Parser le fragment HTML du paragraphe traduit
-                # Ajouter un div parent pour s'assurer que le fragment est un XML valide
                 parser = etree.HTMLParser()
                 root = etree.fromstring(f"<div>{translated_html.strip()}</div>", parser)
                 
-                # Trouver tous les spans à l'intérieur du paragraphe
                 translated_spans = root.xpath('.//span[@id]')
                 if not translated_spans:
                     self.debug_logger.warning(f"  ! Aucun span avec ID trouvé dans la traduction pour le paragraphe {para_id}")
                     continue
 
-                # 4. Pour chaque span trouvé dans la traduction, mettre à jour l'objet correspondant
                 for node in translated_spans:
                     span_id = node.get('id')
                     if span_id in span_map:
-                        # Reconstituer le texte complet du nœud (texte + texte de queue)
                         text_content = (node.text or "") + (node.tail or "").rstrip()
                         span_map[span_id].text = text_content
                         self.debug_logger.info(f"    > Mapping réussi pour {span_id}: '{text_content[:50]}...'")
@@ -434,7 +419,6 @@ class MainWindow:
                 self.debug_logger.error(f"     HTML problématique: {translated_html}")
 
         self.debug_logger.info("--- Fin de _prepare_render_version ---")
-        return pages_copy
 
     def _export_pdf(self):
         output_filename = self.output_filename_var.get().strip()
@@ -478,9 +462,6 @@ class MainWindow:
                 if final_bbox_data:
                     block_obj.final_bbox = tuple(final_bbox_data)
                 
-                # --- CORRECTION MAJEURE : Reconstruire la hiérarchie Paragraphe -> Span ---
-                
-                # 1. Reconstruire les paragraphes et leurs spans
                 if 'paragraphs' in block_data and block_data['paragraphs']:
                     for para_data in block_data['paragraphs']:
                         para_obj = Paragraph(
@@ -503,9 +484,7 @@ class MainWindow:
                             para_obj.spans.append(span_obj)
                         block_obj.paragraphs.append(para_obj)
                 
-                # 2. Reconstruire la liste plate de spans pour la compatibilité
                 block_obj.spans = [span for para in block_obj.paragraphs for span in para.spans]
-
                 page_obj.text_blocks.append(block_obj)
 
             pages.append(page_obj)
@@ -538,6 +517,7 @@ class ToolTip:
     def hide_tooltip(self, event):
         if self.tooltip_window: self.tooltip_window.destroy()
         self.tooltip_window = None
+
 
 
 
