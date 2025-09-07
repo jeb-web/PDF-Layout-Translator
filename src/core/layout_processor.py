@@ -34,19 +34,23 @@ class LayoutProcessor:
         for page in pages:
             self.debug_logger.info(f"  > Traitement de la Page {page.page_number}")
             
+            # --- NOUVEAU : Logique de repositionnement vertical ---
             vertical_offset = 0.0
 
             for block in sorted(page.text_blocks, key=lambda b: b.bbox[1]):
                 self.debug_logger.info(f"    -> Calcul du reflow pour le bloc {block.id}")
 
+                # --- NOUVEAU : Sauvegarde de la géométrie originale et application du décalage ---
                 original_y_start = block.bbox[1]
                 original_height = block.bbox[3] - original_y_start
                 
+                # Le bloc est déplacé vers le bas par le décalage accumulé
                 block.bbox = (block.bbox[0], original_y_start + vertical_offset, block.bbox[2], (original_y_start + vertical_offset) + original_height)
                 
                 all_new_spans_for_block = []
                 current_y = block.bbox[1]
                 
+                # Logique de calcul de la largeur optimale (inchangée)
                 max_ideal_width = 0
                 original_block_width = block.bbox[2] - block.bbox[0]
                 for para in block.paragraphs:
@@ -69,6 +73,7 @@ class LayoutProcessor:
                     else:
                         block_width_for_reflow = max_available_width
                 
+                # Logique de reflow du texte (inchangée)
                 for para in block.paragraphs:
                     if not para.spans: continue
 
@@ -123,6 +128,7 @@ class LayoutProcessor:
 
                 block.spans = all_new_spans_for_block
                 
+                # --- NOUVEAU : Calcul de l'augmentation de hauteur et mise à jour du décalage ---
                 new_height = (current_y - block.bbox[1]) if all_new_spans_for_block else 0
                 block.final_bbox = (block.bbox[0], block.bbox[1], block.bbox[2], block.bbox[1] + new_height)
                 
