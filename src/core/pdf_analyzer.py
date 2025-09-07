@@ -2,7 +2,7 @@
 # -*- coding: utf-8 -*-
 """
 PDF Layout Translator - Analyseur de PDF
-*** VERSION FINALE ET STABILISÉE v1.8.1 - CORRECTION DE LA SCISSION DE LISTE ***
+*** VERSION 1.9 - LOGIQUE DE PARAGRAPHE AFFINÉE ***
 """
 import logging
 import re
@@ -75,7 +75,7 @@ class PDFAnalyzer:
         return unified_blocks
 
     def analyze_pdf(self, pdf_path: Path) -> List[PageObject]:
-        self.logger.info(f"Début de l'analyse architecturale (v1.8.1 - Unification Robuste) de {pdf_path}")
+        self.logger.info(f"Début de l'analyse architecturale (v1.9 - Logique de Paragraphe Affinée) de {pdf_path}")
         doc = fitz.open(pdf_path)
         pages = []
 
@@ -112,7 +112,7 @@ class PDFAnalyzer:
                 
                 current_paragraph_spans = []
                 para_counter = 1
-                temp_paragraphs = [] # On utilise une liste temporaire
+                temp_paragraphs = []
                 for i, line in enumerate(sorted_lines):
                     if not line['spans']: continue
                     current_paragraph_spans.extend(line['spans'])
@@ -122,11 +122,16 @@ class PDFAnalyzer:
                     if not is_last_line_of_block:
                         next_line = sorted_lines[i+1]
                         if not next_line['spans']: continue
+
+                        # --- DÉBUT DE LA NOUVELLE LOGIQUE DE RUPTURE (v1.9) ---
+
+                        # Règle 1 : Ruptures fortes (listes, écarts verticaux)
                         next_starts_with_bullet = next_line['spans'][0].text.strip().startswith(('•', '-', '–'))
                         next_starts_with_number = re.match(r'^\s*\d+\.?', next_line['spans'][0].text.strip())
                         if next_starts_with_bullet or next_starts_with_number:
                             force_break = True
                             reason = "Nouvel item de liste"
+                        
                         if not force_break:
                             line_height = line['bbox'][3] - line['bbox'][1]
                             if line_height <= 0: line_height = 10 
@@ -134,20 +139,38 @@ class PDFAnalyzer:
                             if vertical_gap > line_height * 0.4:
                                 force_break = True
                                 reason = f"Écart vertical large ({vertical_gap:.1f} > {line_height * 0.4:.1f})"
+
+                        # Règle 2 : Rupture sur changement de style significatif
                         if not force_break:
                             last_span_style = current_paragraph_spans[-1].font
                             next_span_style = next_line['spans'][0].font
-                            if last_span_style.name != next_span_style.name or abs(last_span_style.size - next_span_style.size) > 0.5:
+                            style_changed = (last_span_style.name != next_span_style.name or 
+                                             abs(last_span_style.size - next_span_style.size) > 0.1)
+                            
+                            next_line_text = next_line['spans'][0].text.strip()
+                            starts_with_uppercase = next_line_text and next_line_text[0].isupper()
+
+                            if style_changed and starts_with_uppercase:
                                 force_break = True
-                                reason = "Changement de police/taille"
+                                reason = "Changement de style et début par majuscule"
+                        
+                        # Règle 3 : Rupture sur ponctuation de fin de phrase
                         if not force_break:
                             full_line_text = "".join(s.text for s in line['spans']).strip()
-                            if full_line_text.endswith(('.', '!', '?', ':')):
+                            next_line_text = "".join(s.text for s in next_line['spans']).strip()
+                            
+                            ends_with_punctuation = full_line_text.endswith(('.', '!', '?', ':'))
+                            next_starts_with_uppercase = next_line_text and next_line_text[0].isupper()
+
+                            if ends_with_punctuation and next_starts_with_uppercase:
                                 force_break = True
-                                reason = "Ponctuation de fin de ligne"
-                    
+                                reason = "Ponctuation de fin de phrase + Majuscule"
+
+                        # --- FIN DE LA NOUVELLE LOGIQUE DE RUPTURE ---
+
                     if is_last_line_of_block or force_break:
                         if current_paragraph_spans:
+                            self.debug_logger.info(f"        -> Rupture de paragraphe. Raison : {reason if force_break else 'Fin du bloc'}")
                             para_id = f"{block_id}_P{para_counter}"
                             paragraph = Paragraph(id=para_id, spans=list(current_paragraph_spans))
                             temp_paragraphs.append(paragraph)
