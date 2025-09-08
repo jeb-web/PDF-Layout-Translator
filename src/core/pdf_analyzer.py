@@ -2,7 +2,7 @@
 # -*- coding: utf-8 -*-
 """
 PDF Layout Translator - Analyseur de PDF
-*** VERSION 2.1 - ALGORITHME D'UNIFICATION ITÉRATIF ***
+*** VERSION FINALE ET STABILISÉE v1.8.1 - CORRECTION DE LA SCISSION DE LISTE ***
 """
 import logging
 import re
@@ -20,6 +20,83 @@ class PDFAnalyzer:
     def _normalize_font_name(self, font_name: str) -> str:
         return re.sub(r"^[A-Z]{6}\+", "", font_name)
 
+    def _get_logical_reading_order(self, blocks: List[TextBlock], page_width: float) -> List[TextBlock]:
+        """
+        Trie les blocs de texte en suivant un ordre de lecture logique (colonnes, etc.).
+        """
+        # a. Gestion des cas particuliers
+        if not blocks:
+            return []
+
+        # Heuristique des blocs larges
+        wide_blocks = []
+        normal_blocks = []
+        for block in blocks:
+            block_width = block.bbox[2] - block.bbox[0]
+            if block_width > (page_width * 0.60):
+                wide_blocks.append(block)
+            else:
+                normal_blocks.append(block)
+
+        # b. Détection des colonnes (sur les normal_blocks)
+        if not normal_blocks:
+            # S'il n'y a que des blocs larges, on les trie simplement par Y
+            wide_blocks.sort(key=lambda b: b.bbox[1])
+            return wide_blocks
+
+        columns: List[Tuple[float, float, List[TextBlock]]] = []
+        sorted_normal_blocks_by_x = sorted(normal_blocks, key=lambda b: b.bbox[0])
+
+        for block in sorted_normal_blocks_by_x:
+            block_center_x = (block.bbox[0] + block.bbox[2]) / 2
+            found_column = False
+            for i, (col_x1, col_x2, col_blocks) in enumerate(columns):
+                # Un bloc appartient à une colonne si son centre est dans la plage X de la colonne
+                if col_x1 <= block_center_x <= col_x2:
+                    col_blocks.append(block)
+                    # Mettre à jour les limites de la colonne
+                    new_x1 = min(col_x1, block.bbox[0])
+                    new_x2 = max(col_x2, block.bbox[2])
+                    columns[i] = (new_x1, new_x2, col_blocks)
+                    found_column = True
+                    break
+            
+            if not found_column:
+                # Créer une nouvelle colonne
+                columns.append((block.bbox[0], block.bbox[2], [block]))
+
+        # c. Tri des colonnes et de leur contenu
+        columns.sort(key=lambda c: c[0]) # Tri des colonnes de gauche à droite
+        for _, _, col_blocks in columns:
+            col_blocks.sort(key=lambda b: b.bbox[1]) # Tri des blocs dans chaque colonne de haut en bas
+
+        # d. Aplatissement de la liste
+        sorted_blocks = [block for _, _, col_blocks in columns for block in col_blocks]
+
+        # e. Ré-insertion des blocs larges
+        if wide_blocks:
+            # On fusionne les deux listes en respectant l'ordre vertical (Y)
+            final_list = []
+            wide_blocks.sort(key=lambda b: b.bbox[1])
+            
+            wide_idx, sorted_idx = 0, 0
+            while wide_idx < len(wide_blocks) and sorted_idx < len(sorted_blocks):
+                if wide_blocks[wide_idx].bbox[1] < sorted_blocks[sorted_idx].bbox[1]:
+                    final_list.append(wide_blocks[wide_idx])
+                    wide_idx += 1
+                else:
+                    final_list.append(sorted_blocks[sorted_idx])
+                    sorted_idx += 1
+            
+            # Ajouter les éléments restants
+            final_list.extend(wide_blocks[wide_idx:])
+            final_list.extend(sorted_blocks[sorted_idx:])
+            sorted_blocks = final_list
+
+        # f. Retour
+        return sorted_blocks
+
+
     def _should_merge(self, block_a: TextBlock, block_b: TextBlock) -> Tuple[bool, str]:
         if not all([
             block_a.paragraphs,
@@ -33,96 +110,49 @@ class PDFAnalyzer:
         first_span_b = block_b.paragraphs[0].spans[0]
 
         vertical_gap = block_b.bbox[1] - block_a.bbox[3]
-        line_height_threshold = last_span_a.font.size * 2.5
+        line_height_threshold = last_span_a.font.size * 1.5
         if vertical_gap >= line_height_threshold:
             return False, f"Écart vertical trop grand ({vertical_gap:.1f} >= {line_height_threshold:.1f})"
 
-        a_x1, _, a_x2, _ = block_a.bbox
-        b_x1, _, b_x2, _ = block_b.bbox
-        if (a_x2 < b_x1) or (b_x2 < a_x1):
-            return False, f"Pas de chevauchement horizontal (A_x2:{a_x2:.1f} < B_x1:{b_x1:.1f} ou B_x2:{b_x2:.1f} < A_x1:{a_x1:.1f})"
-        
+        horizontal_gap = abs(last_span_a.bbox[0] - first_span_b.bbox[0])
+        if horizontal_gap > 10:
+            return False, f"Désalignement horizontal significatif ({horizontal_gap:.1f} > 10)"
+
         style_a = last_span_a.font
         style_b = first_span_b.font
-        
-        # On ne fusionne pas si le style change drastiquement (suggérant un titre)
-        is_title_change = (style_b.is_bold and not style_a.is_bold) or (style_b.size > style_a.size + 1)
-        
-        # On ne fusionne pas non plus si la phrase semble terminée et que le style change un peu
-        text_a = "".join(s.text for s in block_a.paragraphs[-1].spans).strip()
-        ends_with_punctuation = text_a.endswith(('.', '!', '?', ':'))
-        
-        style_is_different = (style_a.name != style_b.name or abs(style_a.size - style_b.size) > 0.5)
-
-        if is_title_change or (ends_with_punctuation and style_is_different):
-             return False, f"Changement de style sémantique (titre ou fin de phrase)"
+        font_name_a = style_a.name.split('-')[0]
+        font_name_b = style_b.name.split('-')[0]
+        if font_name_a != font_name_b:
+            return False, f"Changement de police ({style_a.name} -> {style_b.name})"
+        if abs(style_a.size - style_b.size) > 0.5:
+            return False, f"Changement de taille ({style_a.size:.1f} -> {style_b.size:.1f})"
             
         return True, "Règles de fusion respectées"
 
     def _unify_text_blocks(self, blocks: List[TextBlock]) -> List[TextBlock]:
         if not blocks: return []
-        self.debug_logger.info("    > Démarrage de la phase d'unification des blocs (v2.1 - Itératif)...")
+
+        self.debug_logger.info("    > Démarrage de la phase d'unification des blocs...")
+        unified_blocks = []
+        current_block = copy.deepcopy(blocks[0])
+
+        for next_block in blocks[1:]:
+            should_merge, reason = self._should_merge(current_block, next_block)
+            if should_merge:
+                current_block.paragraphs.extend(next_block.paragraphs)
+                current_block.bbox = (min(current_block.bbox[0], next_block.bbox[0]), min(current_block.bbox[1], next_block.bbox[1]), max(current_block.bbox[2], next_block.bbox[2]), max(current_block.bbox[3], next_block.bbox[3]))
+                self.debug_logger.info(f"      - Fusion du bloc {next_block.id} dans {current_block.id}. Raison: {reason}")
+            else:
+                self.debug_logger.info(f"      - Finalisation du bloc unifié {current_block.id}. Raison de la rupture: {reason}")
+                unified_blocks.append(current_block)
+                current_block = copy.deepcopy(next_block)
         
-        # --- DÉBUT DE LA CORRECTION v2.1 ---
-        # Remplacement de l'algorithme à passage unique par un algorithme itératif.
-        
-        work_list = copy.deepcopy(blocks)
-        
-        while True:
-            merged_in_pass = False
-            next_pass_list = []
-            
-            i = 0
-            while i < len(work_list):
-                current_block = work_list[i]
-                
-                # Chercher le meilleur candidat pour la fusion
-                best_candidate_index = -1
-                min_distance = float('inf')
-
-                for j in range(len(work_list)):
-                    if i == j: continue
-                    candidate_block = work_list[j]
-                    
-                    # On ne fusionne que des blocs verticalement proches
-                    if candidate_block.bbox[1] > current_block.bbox[3]:
-                        should_merge, reason = self._should_merge(current_block, candidate_block)
-                        if should_merge:
-                            distance = candidate_block.bbox[1] - current_block.bbox[3]
-                            if distance < min_distance:
-                                min_distance = distance
-                                best_candidate_index = j
-
-                if best_candidate_index != -1:
-                    merged_in_pass = True
-                    candidate_to_merge = work_list.pop(best_candidate_index)
-                    
-                    self.debug_logger.info(f"      - Fusion du bloc {candidate_to_merge.id} dans {current_block.id}.")
-                    
-                    current_block.paragraphs.extend(candidate_to_merge.paragraphs)
-                    current_block.bbox = (
-                        min(current_block.bbox[0], candidate_to_merge.bbox[0]),
-                        min(current_block.bbox[1], candidate_to_merge.bbox[1]),
-                        max(current_block.bbox[2], candidate_to_merge.bbox[2]),
-                        max(current_block.bbox[3], candidate_to_merge.bbox[3])
-                    )
-                    # On reste sur le même 'current_block' pour voir s'il peut absorber d'autres blocs
-                    continue 
-                
-                next_pass_list.append(current_block)
-                i += 1
-            
-            work_list = next_pass_list
-            if not merged_in_pass:
-                break # Aucune fusion n'a eu lieu pendant toute la passe, le processus est stable.
-
-        self.debug_logger.info(f"    > Unification terminée. Nombre de blocs: {len(blocks)} -> {len(work_list)}")
-        return work_list
-        # --- FIN DE LA CORRECTION ---
-
+        unified_blocks.append(current_block)
+        self.debug_logger.info(f"    > Unification terminée. Nombre de blocs: {len(blocks)} -> {len(unified_blocks)}")
+        return unified_blocks
 
     def analyze_pdf(self, pdf_path: Path) -> List[PageObject]:
-        self.logger.info(f"Début de l'analyse architecturale (v2.1 - Unification Itérative) de {pdf_path}")
+        self.logger.info(f"Début de l'analyse architecturale (v1.8.1 - Unification Robuste) de {pdf_path}")
         doc = fitz.open(pdf_path)
         pages = []
 
@@ -133,7 +163,8 @@ class PDFAnalyzer:
             
             raw_text_blocks = []
             block_counter = 0
-            for block_data in sorted([b for b in blocks_data if b['type'] == 0], key=lambda b: (b['bbox'][1], b['bbox'][0])):
+            # MODIFICATION : Suppression du tri initial pour le remplacer par le tri logique
+            for block_data in [b for b in blocks_data if b['type'] == 0]:
                 block_counter += 1
                 block_id = f"P{page_num+1}_B{block_counter}"
                 text_block = TextBlock(id=block_id, bbox=block_data['bbox'])
@@ -159,7 +190,7 @@ class PDFAnalyzer:
                 
                 current_paragraph_spans = []
                 para_counter = 1
-                temp_paragraphs = []
+                temp_paragraphs = [] # On utilise une liste temporaire
                 for i, line in enumerate(sorted_lines):
                     if not line['spans']: continue
                     current_paragraph_spans.extend(line['spans'])
@@ -169,13 +200,11 @@ class PDFAnalyzer:
                     if not is_last_line_of_block:
                         next_line = sorted_lines[i+1]
                         if not next_line['spans']: continue
-
                         next_starts_with_bullet = next_line['spans'][0].text.strip().startswith(('•', '-', '–'))
                         next_starts_with_number = re.match(r'^\s*\d+\.?', next_line['spans'][0].text.strip())
                         if next_starts_with_bullet or next_starts_with_number:
                             force_break = True
                             reason = "Nouvel item de liste"
-                        
                         if not force_break:
                             line_height = line['bbox'][3] - line['bbox'][1]
                             if line_height <= 0: line_height = 10 
@@ -183,34 +212,20 @@ class PDFAnalyzer:
                             if vertical_gap > line_height * 0.4:
                                 force_break = True
                                 reason = f"Écart vertical large ({vertical_gap:.1f} > {line_height * 0.4:.1f})"
-
                         if not force_break:
                             last_span_style = current_paragraph_spans[-1].font
                             next_span_style = next_line['spans'][0].font
-                            style_changed = (last_span_style.name != next_span_style.name or 
-                                             abs(last_span_style.size - next_span_style.size) > 0.1)
-                            
-                            next_line_text = next_line['spans'][0].text.strip()
-                            starts_with_uppercase = next_line_text and next_line_text[0].isupper()
-
-                            if style_changed and starts_with_uppercase:
+                            if last_span_style.name != next_span_style.name or abs(last_span_style.size - next_span_style.size) > 0.5:
                                 force_break = True
-                                reason = "Changement de style et début par majuscule"
-                        
+                                reason = "Changement de police/taille"
                         if not force_break:
                             full_line_text = "".join(s.text for s in line['spans']).strip()
-                            next_line_text = "".join(s.text for s in next_line['spans']).strip()
-                            
-                            ends_with_punctuation = full_line_text.endswith(('.', '!', '?', ':'))
-                            next_starts_with_uppercase = next_line_text and next_line_text[0].isupper()
-
-                            if ends_with_punctuation and next_starts_with_uppercase:
+                            if full_line_text.endswith(('.', '!', '?', ':')):
                                 force_break = True
-                                reason = "Ponctuation de fin de phrase + Majuscule"
-
+                                reason = "Ponctuation de fin de ligne"
+                    
                     if is_last_line_of_block or force_break:
                         if current_paragraph_spans:
-                            self.debug_logger.info(f"        -> Rupture de paragraphe. Raison : {reason if force_break else 'Fin du bloc'}")
                             para_id = f"{block_id}_P{para_counter}"
                             paragraph = Paragraph(id=para_id, spans=list(current_paragraph_spans))
                             temp_paragraphs.append(paragraph)
@@ -247,7 +262,9 @@ class PDFAnalyzer:
                 if text_block.paragraphs:
                     raw_text_blocks.append(text_block)
 
-            page_obj.text_blocks = self._unify_text_blocks(raw_text_blocks)
+            # MODIFICATION : Appel de la nouvelle méthode de tri logique
+            logically_sorted_blocks = self._get_logical_reading_order(raw_text_blocks, page.rect.width)
+            page_obj.text_blocks = self._unify_text_blocks(logically_sorted_blocks)
             
             self.debug_logger.info(f"  > Démarrage de l'analyse spatiale pour la page {page_num + 1}")
             for i, block in enumerate(page_obj.text_blocks):
@@ -268,4 +285,3 @@ class PDFAnalyzer:
             pages.append(page_obj)
         doc.close()
         return pages
-
