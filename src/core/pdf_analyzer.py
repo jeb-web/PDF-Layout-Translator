@@ -2,7 +2,7 @@
 # -*- coding: utf-8 -*-
 """
 PDF Layout Translator - Analyseur de PDF
-*** VERSION FINALE - LOGIQUE DE SEGMENTATION ET FUSION COHÉRENTES ***
+*** VERSION FINALE - LOGIQUE DE SEGMENTATION ET FUSION COHÉRENTES ET ROBUSTES ***
 """
 import logging
 import re
@@ -191,11 +191,16 @@ class PDFAnalyzer:
                         if not next_line['spans']: continue
                         
                         next_starts_with_bullet = next_line['spans'][0].text.strip().startswith(('•', '-', '–'))
-                        next_starts_with_number = re.match(r'^\s*\d+\.?', next_line['spans'][0].text.strip())
+                        # --- DÉBUT DE LA MODIFICATION ---
+                        # On rend la règle de détection de liste numérique plus stricte.
+                        # Elle ne doit se déclencher que si un nombre est suivi d'un point et d'un espace.
+                        next_starts_with_number = re.match(r'^\s*\d+\.\s', next_line['spans'][0].text.strip())
+                        # --- FIN DE LA MODIFICATION ---
+                        
                         if next_starts_with_bullet or next_starts_with_number:
                             force_break = True
                             reason = "Nouvel item de liste"
-
+                            
                         if not force_break:
                             line_height = line['bbox'][3] - line['bbox'][1]
                             if line_height <= 0: line_height = 10 
@@ -203,22 +208,10 @@ class PDFAnalyzer:
                             if vertical_gap > line_height * 0.4:
                                 force_break = True
                                 reason = f"Écart vertical large ({vertical_gap:.1f} > {line_height * 0.4:.1f})"
-                        
-                        # --- DÉBUT DE LA MODIFICATION ---
-                        # SUPPRESSION de la règle de segmentation basée sur le changement de style.
-                        # Cette règle était trop stricte et coupait des paragraphes inutilement.
-                        # La ponctuation est un bien meilleur indicateur.
-                        # if not force_break:
-                        #     last_span_style = current_paragraph_spans[-1].font
-                        #     next_span_style = next_line['spans'][0].font
-                        #     if last_span_style.name != next_span_style.name or abs(last_span_style.size - next_span_style.size) > 0.5:
-                        #         force_break = True
-                        #         reason = "Changement de police/taille"
-                        # --- FIN DE LA MODIFICATION ---
 
                         if not force_break:
                             full_line_text = "".join(s.text for s in line['spans']).strip()
-                            if full_line_text.endswith(('.', '!', '?', ':')):
+                            if full_line_text.endswith(('.', '!', '?')):
                                 force_break = True
                                 reason = "Ponctuation de fin de ligne"
                     
