@@ -2,7 +2,7 @@
 # -*- coding: utf-8 -*-
 """
 PDF Layout Translator - Analyseur de PDF
-*** VERSION AVEC TRACES DE DÉBOGAGE POUR LA SEGMENTATION ***
+*** VERSION AVEC CORRECTION FINALE DE LA SEGMENTATION ET TRACES ***
 """
 import logging
 import re
@@ -140,7 +140,7 @@ class PDFAnalyzer:
         return unified_blocks
 
     def analyze_pdf(self, pdf_path: Path) -> List[PageObject]:
-        self.logger.info(f"Début de l'analyse architecturale (avec traces de débogage) de {pdf_path}")
+        self.logger.info(f"Début de l'analyse architecturale (avec correction regex et traces) de {pdf_path}")
         doc = fitz.open(pdf_path)
         pages = []
 
@@ -154,7 +154,7 @@ class PDFAnalyzer:
             for block_data in [b for b in blocks_data if b['type'] == 0]:
                 block_counter += 1
                 block_id = f"P{page_num+1}_B{block_counter}"
-                self.debug_logger.info(f"  Traitement du bloc brut ID: {block_id}") # --- AJOUT TRACE ---
+                self.debug_logger.info(f"  Traitement du bloc brut ID: {block_id}") # --- TRACE ---
                 
                 text_block = TextBlock(id=block_id, bbox=block_data['bbox'])
                 
@@ -183,9 +183,8 @@ class PDFAnalyzer:
                 for i, line in enumerate(sorted_lines):
                     if not line['spans']: continue
 
-                    # --- AJOUT TRACE ---
                     line_text_for_log = "".join(s.text for s in line['spans']).strip()
-                    self.debug_logger.info(f"    * Ligne {i+1}/{len(sorted_lines)} en cours d'analyse: '{line_text_for_log[:80]}'")
+                    self.debug_logger.info(f"    * Ligne {i+1}/{len(sorted_lines)} en cours d'analyse: '{line_text_for_log[:80]}'") # --- TRACE ---
                     
                     current_paragraph_spans.extend(line['spans'])
                     is_last_line_of_block = (i == len(sorted_lines) - 1)
@@ -196,16 +195,19 @@ class PDFAnalyzer:
                         next_line = sorted_lines[i+1]
                         if not next_line['spans']: continue
                         
-                        next_line_text_for_log = next_line['spans'][0].text.strip() # --- AJOUT TRACE ---
-                        self.debug_logger.info(f"      -> Comparaison avec ligne suivante qui commence par: '{next_line_text_for_log[:30]}...'")
+                        next_line_text_for_log = next_line['spans'][0].text.strip()
+                        self.debug_logger.info(f"      -> Comparaison avec ligne suivante qui commence par: '{next_line_text_for_log[:30]}...'") # --- TRACE ---
 
                         next_starts_with_bullet = next_line_text_for_log.startswith(('•', '-', '–'))
-                        next_starts_with_number = re.match(r'^\s*\d+\.?', next_line_text_for_log)
+                        
+                        # --- MODIFICATION FINALE ---
+                        # Règle stricte : un ou plusieurs chiffres, suivis d'un point, suivi d'un espace.
+                        next_starts_with_number = re.match(r'^\s*\d+\.\s', next_line_text_for_log)
                         
                         if next_starts_with_bullet or next_starts_with_number:
                             force_break = True
                             reason = "Nouvel item de liste détecté"
-                            self.debug_logger.info(f"        -> DÉCISION: RUPTURE. Raison: {reason}") # --- AJOUT TRACE ---
+                            self.debug_logger.info(f"        -> DÉCISION: RUPTURE. Raison: {reason}") # --- TRACE ---
 
                         if not force_break:
                             line_height = line['bbox'][3] - line['bbox'][1]
@@ -214,34 +216,24 @@ class PDFAnalyzer:
                             if vertical_gap > line_height * 0.4:
                                 force_break = True
                                 reason = f"Écart vertical large ({vertical_gap:.1f} > {line_height * 0.4:.1f})"
-                                self.debug_logger.info(f"        -> DÉCISION: RUPTURE. Raison: {reason}") # --- AJOUT TRACE ---
-                        
-                        if not force_break:
-                            last_span_style = current_paragraph_spans[-1].font
-                            next_span_style = next_line['spans'][0].font
-                            if last_span_style.name != next_span_style.name or abs(last_span_style.size - next_span_style.size) > 0.5:
-                                force_break = True
-                                reason = f"Changement de police/taille ({last_span_style.name}/{last_span_style.size:.1f} -> {next_span_style.name}/{next_span_style.size:.1f})"
-                                self.debug_logger.info(f"        -> DÉCISION: RUPTURE. Raison: {reason}") # --- AJOUT TRACE ---
-                        
+                                self.debug_logger.info(f"        -> DÉCISION: RUPTURE. Raison: {reason}") # --- TRACE ---
+
                         if not force_break:
                             full_line_text = "".join(s.text for s in line['spans']).strip()
                             if full_line_text.endswith(('.', '!', '?', ':')):
                                 force_break = True
                                 reason = "Ponctuation de fin de ligne"
-                                self.debug_logger.info(f"        -> DÉCISION: RUPTURE. Raison: {reason}") # --- AJOUT TRACE ---
+                                self.debug_logger.info(f"        -> DÉCISION: RUPTURE. Raison: {reason}") # --- TRACE ---
                     
                     if is_last_line_of_block or force_break:
                         if current_paragraph_spans:
                             para_id = f"{block_id}_P{para_counter}"
                             paragraph = Paragraph(id=para_id, spans=list(current_paragraph_spans))
                             temp_paragraphs.append(paragraph)
-                            # --- AJOUT TRACE ---
-                            self.debug_logger.info(f"    -> Paragraphe '{para_id}' finalisé.")
+                            self.debug_logger.info(f"    -> Paragraphe '{para_id}' finalisé.") # --- TRACE ---
                             para_counter += 1
                             current_paragraph_spans.clear()
                 
-                # (Le reste de la méthode est inchangé)
                 for para in temp_paragraphs:
                     if para.spans:
                         first_span = para.spans[0]
