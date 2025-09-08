@@ -2,7 +2,7 @@
 # -*- coding: utf-8 -*-
 """
 PDF Layout Translator - Analyseur de PDF
-*** VERSION CORRIGÉE - LOGIQUE DE FUSION ÉQUILIBRÉE ET INTELLIGENTE ***
+*** VERSION FINALE - LOGIQUE DE SEGMENTATION ET FUSION COHÉRENTES ***
 """
 import logging
 import re
@@ -90,13 +90,13 @@ class PDFAnalyzer:
             
         last_span_a = block_a.paragraphs[-1].spans[-1]
 
-        # RÈGLE 1 : L'écart vertical doit être faible pour suggérer une continuation de texte.
+        # Règle 1 : L'écart vertical doit être faible.
         vertical_gap = block_b.bbox[1] - block_a.bbox[3]
         line_height_threshold = last_span_a.font.size * 1.5 
         if vertical_gap >= line_height_threshold:
             return False, f"Écart vertical trop grand ({vertical_gap:.1f} >= {line_height_threshold:.1f})"
 
-        # RÈGLE 2 : Les blocs doivent être alignés horizontalement (dans la même colonne).
+        # Règle 2 : Les blocs doivent être dans la même colonne.
         horizontal_alignment_gap = abs(block_a.bbox[0] - block_b.bbox[0])
         if horizontal_alignment_gap > 25.0:
             return False, f"Désalignement de colonne significatif ({horizontal_alignment_gap:.1f} > 25.0)"
@@ -105,13 +105,12 @@ class PDFAnalyzer:
         last_line_text_a = "".join(s.text for s in block_a.paragraphs[-1].spans).strip()
         first_span_text_b = block_b.paragraphs[0].spans[0].text.strip()
 
-        # RÈGLE 3 : Une ponctuation finale forte suggère une fin de paragraphe.
+        # Règle 3 : Une ponctuation finale forte suggère une fin de paragraphe.
         if last_line_text_a.endswith(('.', '!', '?')):
              return False, "Le bloc A se termine par une ponctuation finale."
 
-        # RÈGLE 4 : Une majuscule en début de bloc B suggère une nouvelle phrase.
+        # Règle 4 : Une majuscule en début de bloc B suggère une nouvelle phrase.
         if first_span_text_b and first_span_text_b[0].isupper():
-            # Exception : ne pas casser si la ligne précédente se termine par une virgule, etc.
             if not last_line_text_a.endswith((',', ';', ':')):
                 return False, "Le bloc B commence par une majuscule, suggérant une nouvelle phrase."
 
@@ -127,7 +126,6 @@ class PDFAnalyzer:
         for next_block in blocks[1:]:
             should_merge, reason = self._should_merge(current_block, next_block)
             if should_merge:
-                # Si on fusionne, on étend le dernier paragraphe du bloc actuel avec le contenu du bloc suivant.
                 last_paragraph = current_block.paragraphs[-1]
                 for para in next_block.paragraphs:
                     last_paragraph.spans.extend(para.spans)
@@ -144,7 +142,7 @@ class PDFAnalyzer:
         return unified_blocks
 
     def analyze_pdf(self, pdf_path: Path) -> List[PageObject]:
-        self.logger.info(f"Début de l'analyse architecturale (logique de fusion équilibrée) de {pdf_path}")
+        self.logger.info(f"Début de l'analyse architecturale (logique de fusion et segmentation cohérentes) de {pdf_path}")
         doc = fitz.open(pdf_path)
         pages = []
 
@@ -191,11 +189,13 @@ class PDFAnalyzer:
                     if not is_last_line_of_block:
                         next_line = sorted_lines[i+1]
                         if not next_line['spans']: continue
+                        
                         next_starts_with_bullet = next_line['spans'][0].text.strip().startswith(('•', '-', '–'))
                         next_starts_with_number = re.match(r'^\s*\d+\.?', next_line['spans'][0].text.strip())
                         if next_starts_with_bullet or next_starts_with_number:
                             force_break = True
                             reason = "Nouvel item de liste"
+
                         if not force_break:
                             line_height = line['bbox'][3] - line['bbox'][1]
                             if line_height <= 0: line_height = 10 
@@ -203,12 +203,19 @@ class PDFAnalyzer:
                             if vertical_gap > line_height * 0.4:
                                 force_break = True
                                 reason = f"Écart vertical large ({vertical_gap:.1f} > {line_height * 0.4:.1f})"
-                        if not force_break:
-                            last_span_style = current_paragraph_spans[-1].font
-                            next_span_style = next_line['spans'][0].font
-                            if last_span_style.name != next_span_style.name or abs(last_span_style.size - next_span_style.size) > 0.5:
-                                force_break = True
-                                reason = "Changement de police/taille"
+                        
+                        # --- DÉBUT DE LA MODIFICATION ---
+                        # SUPPRESSION de la règle de segmentation basée sur le changement de style.
+                        # Cette règle était trop stricte et coupait des paragraphes inutilement.
+                        # La ponctuation est un bien meilleur indicateur.
+                        # if not force_break:
+                        #     last_span_style = current_paragraph_spans[-1].font
+                        #     next_span_style = next_line['spans'][0].font
+                        #     if last_span_style.name != next_span_style.name or abs(last_span_style.size - next_span_style.size) > 0.5:
+                        #         force_break = True
+                        #         reason = "Changement de police/taille"
+                        # --- FIN DE LA MODIFICATION ---
+
                         if not force_break:
                             full_line_text = "".join(s.text for s in line['spans']).strip()
                             if full_line_text.endswith(('.', '!', '?', ':')):
