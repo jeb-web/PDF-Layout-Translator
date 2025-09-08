@@ -2,7 +2,7 @@
 # -*- coding: utf-8 -*-
 """
 PDF Layout Translator - Analyseur de PDF
-*** VERSION CORRIGÉE - LOGIQUE DE FUSION ET TRI AMÉLIORÉS ***
+*** VERSION CORRIGÉE - LOGIQUE DE FUSION ÉQUILIBRÉE ET INTELLIGENTE ***
 """
 import logging
 import re
@@ -21,14 +21,9 @@ class PDFAnalyzer:
         return re.sub(r"^[A-Z]{6}\+", "", font_name)
 
     def _get_logical_reading_order(self, blocks: List[TextBlock], page_width: float) -> List[TextBlock]:
-        """
-        Trie les blocs de texte en suivant un ordre de lecture logique (colonnes, etc.).
-        """
-        # a. Gestion des cas particuliers
         if not blocks:
             return []
 
-        # Heuristique des blocs larges
         wide_blocks = []
         normal_blocks = []
         for block in blocks:
@@ -38,7 +33,6 @@ class PDFAnalyzer:
             else:
                 normal_blocks.append(block)
 
-        # b. Détection des colonnes (sur les normal_blocks)
         if not normal_blocks:
             wide_blocks.sort(key=lambda b: b.bbox[1])
             return wide_blocks
@@ -62,15 +56,12 @@ class PDFAnalyzer:
             if not found_column:
                 columns.append((block.bbox[0], block.bbox[2], [block]))
 
-        # c. Tri des colonnes et de leur contenu
         columns.sort(key=lambda c: c[0])
         for _, _, col_blocks in columns:
             col_blocks.sort(key=lambda b: b.bbox[1])
 
-        # d. Aplatissement de la liste
         sorted_blocks = [block for _, _, col_blocks in columns for block in col_blocks]
 
-        # e. Ré-insertion des blocs larges
         if wide_blocks:
             final_list = []
             wide_blocks.sort(key=lambda b: b.bbox[1])
@@ -92,30 +83,39 @@ class PDFAnalyzer:
 
     def _should_merge(self, block_a: TextBlock, block_b: TextBlock) -> Tuple[bool, str]:
         if not all([
-            block_a.paragraphs,
-            block_a.paragraphs[-1].spans,
-            block_b.paragraphs,
-            block_b.paragraphs[0].spans
+            block_a.paragraphs, block_a.paragraphs[-1].spans,
+            block_b.paragraphs, block_b.paragraphs[0].spans
         ]):
             return False, "Bloc ou paragraphe vide, fusion impossible"
             
         last_span_a = block_a.paragraphs[-1].spans[-1]
-        
-        # --- DÉBUT DE LA CORRECTION ---
-        # La fusion se base principalement sur la proximité verticale.
-        # Un petit écart vertical suggère la continuation d'une même ligne de texte.
+
+        # RÈGLE 1 : L'écart vertical doit être faible pour suggérer une continuation de texte.
         vertical_gap = block_b.bbox[1] - block_a.bbox[3]
-        line_height_threshold = last_span_a.font.size * 0.5  # Seuil volontairement strict
-        
+        line_height_threshold = last_span_a.font.size * 1.5 
         if vertical_gap >= line_height_threshold:
             return False, f"Écart vertical trop grand ({vertical_gap:.1f} >= {line_height_threshold:.1f})"
 
-        # Les conditions sur le changement de style et l'alignement horizontal sont supprimées
-        # car elles empêchent à tort la fusion de phrases contenant du gras/italique
-        # ou qui reviennent à la ligne.
-        # --- FIN DE LA CORRECTION ---
-            
-        return True, "Règles de fusion (assouplies) respectées"
+        # RÈGLE 2 : Les blocs doivent être alignés horizontalement (dans la même colonne).
+        horizontal_alignment_gap = abs(block_a.bbox[0] - block_b.bbox[0])
+        if horizontal_alignment_gap > 25.0:
+            return False, f"Désalignement de colonne significatif ({horizontal_alignment_gap:.1f} > 25.0)"
+
+        # Extraire le texte pour les vérifications sémantiques
+        last_line_text_a = "".join(s.text for s in block_a.paragraphs[-1].spans).strip()
+        first_span_text_b = block_b.paragraphs[0].spans[0].text.strip()
+
+        # RÈGLE 3 : Une ponctuation finale forte suggère une fin de paragraphe.
+        if last_line_text_a.endswith(('.', '!', '?')):
+             return False, "Le bloc A se termine par une ponctuation finale."
+
+        # RÈGLE 4 : Une majuscule en début de bloc B suggère une nouvelle phrase.
+        if first_span_text_b and first_span_text_b[0].isupper():
+            # Exception : ne pas casser si la ligne précédente se termine par une virgule, etc.
+            if not last_line_text_a.endswith((',', ';', ':')):
+                return False, "Le bloc B commence par une majuscule, suggérant une nouvelle phrase."
+
+        return True, "Règles de fusion équilibrées respectées"
 
     def _unify_text_blocks(self, blocks: List[TextBlock]) -> List[TextBlock]:
         if not blocks: return []
@@ -127,8 +127,7 @@ class PDFAnalyzer:
         for next_block in blocks[1:]:
             should_merge, reason = self._should_merge(current_block, next_block)
             if should_merge:
-                # Si on fusionne, on étend le dernier paragraphe du bloc actuel avec le contenu du bloc suivant
-                # pour assurer la continuité de la phrase.
+                # Si on fusionne, on étend le dernier paragraphe du bloc actuel avec le contenu du bloc suivant.
                 last_paragraph = current_block.paragraphs[-1]
                 for para in next_block.paragraphs:
                     last_paragraph.spans.extend(para.spans)
@@ -145,7 +144,7 @@ class PDFAnalyzer:
         return unified_blocks
 
     def analyze_pdf(self, pdf_path: Path) -> List[PageObject]:
-        self.logger.info(f"Début de l'analyse architecturale (logique de fusion et tri améliorés) de {pdf_path}")
+        self.logger.info(f"Début de l'analyse architecturale (logique de fusion équilibrée) de {pdf_path}")
         doc = fitz.open(pdf_path)
         pages = []
 
@@ -156,7 +155,6 @@ class PDFAnalyzer:
             
             raw_text_blocks = []
             block_counter = 0
-            # MODIFICATION : Suppression du tri géométrique initial. Le tri se fera logiquement plus tard.
             for block_data in [b for b in blocks_data if b['type'] == 0]:
                 block_counter += 1
                 block_id = f"P{page_num+1}_B{block_counter}"
@@ -255,7 +253,6 @@ class PDFAnalyzer:
                 if text_block.paragraphs:
                     raw_text_blocks.append(text_block)
 
-            # MODIFICATION : Appel de la nouvelle méthode de tri logique et unification.
             logically_sorted_blocks = self._get_logical_reading_order(raw_text_blocks, page.rect.width)
             page_obj.text_blocks = self._unify_text_blocks(logically_sorted_blocks)
             
