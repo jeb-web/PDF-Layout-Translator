@@ -2,7 +2,7 @@
 # -*- coding: utf-8 -*-
 """
 PDF Layout Translator - Analyseur de PDF
-*** VERSION FINALE ET STABILISÉE v1.8.1 - CORRECTION DE LA SCISSION DE LISTE ***
+*** VERSION CORRIGÉE - LOGIQUE DE FUSION ET TRI AMÉLIORÉS ***
 """
 import logging
 import re
@@ -40,7 +40,6 @@ class PDFAnalyzer:
 
         # b. Détection des colonnes (sur les normal_blocks)
         if not normal_blocks:
-            # S'il n'y a que des blocs larges, on les trie simplement par Y
             wide_blocks.sort(key=lambda b: b.bbox[1])
             return wide_blocks
 
@@ -50,11 +49,10 @@ class PDFAnalyzer:
         for block in sorted_normal_blocks_by_x:
             block_center_x = (block.bbox[0] + block.bbox[2]) / 2
             found_column = False
+            tolerance = page_width * 0.05
             for i, (col_x1, col_x2, col_blocks) in enumerate(columns):
-                # Un bloc appartient à une colonne si son centre est dans la plage X de la colonne
-                if col_x1 <= block_center_x <= col_x2:
+                if (col_x1 - tolerance) <= block_center_x <= (col_x2 + tolerance):
                     col_blocks.append(block)
-                    # Mettre à jour les limites de la colonne
                     new_x1 = min(col_x1, block.bbox[0])
                     new_x2 = max(col_x2, block.bbox[2])
                     columns[i] = (new_x1, new_x2, col_blocks)
@@ -62,20 +60,18 @@ class PDFAnalyzer:
                     break
             
             if not found_column:
-                # Créer une nouvelle colonne
                 columns.append((block.bbox[0], block.bbox[2], [block]))
 
         # c. Tri des colonnes et de leur contenu
-        columns.sort(key=lambda c: c[0]) # Tri des colonnes de gauche à droite
+        columns.sort(key=lambda c: c[0])
         for _, _, col_blocks in columns:
-            col_blocks.sort(key=lambda b: b.bbox[1]) # Tri des blocs dans chaque colonne de haut en bas
+            col_blocks.sort(key=lambda b: b.bbox[1])
 
         # d. Aplatissement de la liste
         sorted_blocks = [block for _, _, col_blocks in columns for block in col_blocks]
 
         # e. Ré-insertion des blocs larges
         if wide_blocks:
-            # On fusionne les deux listes en respectant l'ordre vertical (Y)
             final_list = []
             wide_blocks.sort(key=lambda b: b.bbox[1])
             
@@ -88,14 +84,11 @@ class PDFAnalyzer:
                     final_list.append(sorted_blocks[sorted_idx])
                     sorted_idx += 1
             
-            # Ajouter les éléments restants
             final_list.extend(wide_blocks[wide_idx:])
             final_list.extend(sorted_blocks[sorted_idx:])
             sorted_blocks = final_list
 
-        # f. Retour
         return sorted_blocks
-
 
     def _should_merge(self, block_a: TextBlock, block_b: TextBlock) -> Tuple[bool, str]:
         if not all([
@@ -107,27 +100,22 @@ class PDFAnalyzer:
             return False, "Bloc ou paragraphe vide, fusion impossible"
             
         last_span_a = block_a.paragraphs[-1].spans[-1]
-        first_span_b = block_b.paragraphs[0].spans[0]
-
+        
+        # --- DÉBUT DE LA CORRECTION ---
+        # La fusion se base principalement sur la proximité verticale.
+        # Un petit écart vertical suggère la continuation d'une même ligne de texte.
         vertical_gap = block_b.bbox[1] - block_a.bbox[3]
-        line_height_threshold = last_span_a.font.size * 1.5
+        line_height_threshold = last_span_a.font.size * 0.5  # Seuil volontairement strict
+        
         if vertical_gap >= line_height_threshold:
             return False, f"Écart vertical trop grand ({vertical_gap:.1f} >= {line_height_threshold:.1f})"
 
-        horizontal_gap = abs(last_span_a.bbox[0] - first_span_b.bbox[0])
-        if horizontal_gap > 10:
-            return False, f"Désalignement horizontal significatif ({horizontal_gap:.1f} > 10)"
-
-        style_a = last_span_a.font
-        style_b = first_span_b.font
-        font_name_a = style_a.name.split('-')[0]
-        font_name_b = style_b.name.split('-')[0]
-        if font_name_a != font_name_b:
-            return False, f"Changement de police ({style_a.name} -> {style_b.name})"
-        if abs(style_a.size - style_b.size) > 0.5:
-            return False, f"Changement de taille ({style_a.size:.1f} -> {style_b.size:.1f})"
+        # Les conditions sur le changement de style et l'alignement horizontal sont supprimées
+        # car elles empêchent à tort la fusion de phrases contenant du gras/italique
+        # ou qui reviennent à la ligne.
+        # --- FIN DE LA CORRECTION ---
             
-        return True, "Règles de fusion respectées"
+        return True, "Règles de fusion (assouplies) respectées"
 
     def _unify_text_blocks(self, blocks: List[TextBlock]) -> List[TextBlock]:
         if not blocks: return []
@@ -139,7 +127,12 @@ class PDFAnalyzer:
         for next_block in blocks[1:]:
             should_merge, reason = self._should_merge(current_block, next_block)
             if should_merge:
-                current_block.paragraphs.extend(next_block.paragraphs)
+                # Si on fusionne, on étend le dernier paragraphe du bloc actuel avec le contenu du bloc suivant
+                # pour assurer la continuité de la phrase.
+                last_paragraph = current_block.paragraphs[-1]
+                for para in next_block.paragraphs:
+                    last_paragraph.spans.extend(para.spans)
+                
                 current_block.bbox = (min(current_block.bbox[0], next_block.bbox[0]), min(current_block.bbox[1], next_block.bbox[1]), max(current_block.bbox[2], next_block.bbox[2]), max(current_block.bbox[3], next_block.bbox[3]))
                 self.debug_logger.info(f"      - Fusion du bloc {next_block.id} dans {current_block.id}. Raison: {reason}")
             else:
@@ -152,7 +145,7 @@ class PDFAnalyzer:
         return unified_blocks
 
     def analyze_pdf(self, pdf_path: Path) -> List[PageObject]:
-        self.logger.info(f"Début de l'analyse architecturale (v1.8.1 - Unification Robuste) de {pdf_path}")
+        self.logger.info(f"Début de l'analyse architecturale (logique de fusion et tri améliorés) de {pdf_path}")
         doc = fitz.open(pdf_path)
         pages = []
 
@@ -163,7 +156,7 @@ class PDFAnalyzer:
             
             raw_text_blocks = []
             block_counter = 0
-            # MODIFICATION : Suppression du tri initial pour le remplacer par le tri logique
+            # MODIFICATION : Suppression du tri géométrique initial. Le tri se fera logiquement plus tard.
             for block_data in [b for b in blocks_data if b['type'] == 0]:
                 block_counter += 1
                 block_id = f"P{page_num+1}_B{block_counter}"
@@ -190,7 +183,7 @@ class PDFAnalyzer:
                 
                 current_paragraph_spans = []
                 para_counter = 1
-                temp_paragraphs = [] # On utilise une liste temporaire
+                temp_paragraphs = [] 
                 for i, line in enumerate(sorted_lines):
                     if not line['spans']: continue
                     current_paragraph_spans.extend(line['spans'])
@@ -262,7 +255,7 @@ class PDFAnalyzer:
                 if text_block.paragraphs:
                     raw_text_blocks.append(text_block)
 
-            # MODIFICATION : Appel de la nouvelle méthode de tri logique
+            # MODIFICATION : Appel de la nouvelle méthode de tri logique et unification.
             logically_sorted_blocks = self._get_logical_reading_order(raw_text_blocks, page.rect.width)
             page_obj.text_blocks = self._unify_text_blocks(logically_sorted_blocks)
             
