@@ -2,7 +2,7 @@
 # -*- coding: utf-8 -*-
 """
 PDF Layout Translator - Analyseur de PDF
-*** VERSION AVEC LOGIQUE DE SEGMENTATION HIÉRARCHIQUE CORRIGÉE ***
+*** VERSION AVEC LOGIQUE DE SEGMENTATION HIÉRARCHIQUE SIMPLIFIÉE ***
 """
 import logging
 import re
@@ -137,7 +137,7 @@ class PDFAnalyzer:
         return unified_blocks
 
     def analyze_pdf(self, pdf_path: Path) -> List[PageObject]:
-        self.logger.info(f"Début de l'analyse architecturale (logique hiérarchique corrigée) de {pdf_path}")
+        self.logger.info(f"Début de l'analyse architecturale (logique hiérarchique simplifiée) de {pdf_path}")
         doc = fitz.open(pdf_path)
         pages = []
 
@@ -189,7 +189,7 @@ class PDFAnalyzer:
                         
                         next_line_text = next_line['spans'][0].text.strip()
                         
-                        # --- DÉBUT DE LA LOGIQUE HIÉRARCHIQUE CORRIGÉE ---
+                        # --- DÉBUT DE LA LOGIQUE HIÉRARCHIQUE FINALE ---
 
                         # Règle 1: Écart vertical (priorité haute)
                         line_height = line['bbox'][3] - line['bbox'][1] or 10
@@ -198,28 +198,21 @@ class PDFAnalyzer:
                             force_break = True
                             reason = f"Écart vertical large ({vertical_gap:.1f})"
 
-                        # Règle 2: Détection de Titre (priorité haute) - RÉTABLIE
+                        # Règle 2: Détection de Titre (priorité haute)
                         if not force_break:
                             current_text = "".join(s.text for s in line['spans']).strip()
-                            # Un titre est souvent en majuscules et en gras.
-                            is_title = current_text.isupper() and all(s.font.is_bold for s in line['spans'])
+                            is_title_style = current_text.isupper() and all(s.font.is_bold for s in line['spans'])
+                            is_next_line_body = not next_line['spans'][0].font.is_bold
                             
-                            if is_title:
+                            if is_title_style and is_next_line_body:
                                 force_break = True
-                                reason = "Titre détecté (MAJUSCULES et Gras)"
+                                reason = "Titre détecté (MAJUSCULES/Gras -> Normal)"
 
-                        # Règle 3: Détection d'item de liste (priorité haute) - RÉTABLIE
+                        # Règle 3: Détection d'item de liste (priorité haute)
                         if not force_break:
                             if next_line_text.startswith(('•', '-', '–')) or re.match(r'^\s*\d+\.\s', next_line_text):
                                 force_break = True
                                 reason = "Nouvel item de liste explicite"
-
-                        # Règle 4: Ponctuation finale (priorité moyenne)
-                        if not force_break:
-                            full_line_text = "".join(s.text for s in current_paragraph_spans).strip()
-                            if full_line_text.endswith(('.', '!', '?')):
-                                force_break = True
-                                reason = "Ponctuation de fin de ligne"
                         
                         # --- FIN DE LA LOGIQUE HIÉRARCHIQUE ---
                     
