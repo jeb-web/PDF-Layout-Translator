@@ -2,7 +2,7 @@
 # -*- coding: utf-8 -*-
 """
 PDF Layout Translator - Analyseur de PDF
-*** VERSION FINALE - LOGIQUE DE SEGMENTATION ET FUSION COHÉRENTES ET ROBUSTES ***
+*** VERSION AVEC LOGIQUE DE SEGMENTATION HIÉRARCHIQUE FINALE ***
 """
 import logging
 import re
@@ -137,7 +137,7 @@ class PDFAnalyzer:
         return unified_blocks
 
     def analyze_pdf(self, pdf_path: Path) -> List[PageObject]:
-        self.logger.info(f"Début de l'analyse architecturale (logique de fusion et segmentation cohérentes) de {pdf_path}")
+        self.logger.info(f"Début de l'analyse architecturale (logique hiérarchique) de {pdf_path}")
         doc = fitz.open(pdf_path)
         pages = []
 
@@ -187,32 +187,36 @@ class PDFAnalyzer:
                         next_line = sorted_lines[i+1]
                         if not next_line['spans']: continue
                         
-                        # --- DÉBUT DES MODIFICATIONS FINALES ---
+                        # --- DÉBUT DE LA LOGIQUE HIÉRARCHIQUE CORRIGÉE ---
                         next_line_text = next_line['spans'][0].text.strip()
                         
-                        # Règle 1: Détection de puces et de listes numériques STRICTES
-                        starts_with_bullet = next_line_text.startswith(('•', '-', '–'))
-                        starts_with_number = re.match(r'^\s*\d+\.\s', next_line_text) # Exige un point ET un espace
-                        
-                        if starts_with_bullet or starts_with_number:
+                        # Règle 1: Écart vertical (priorité haute)
+                        line_height = line['bbox'][3] - line['bbox'][1] or 10
+                        vertical_gap = next_line['bbox'][1] - line['bbox'][3]
+                        if vertical_gap > line_height * 0.4:
                             force_break = True
-                            reason = "Nouvel item de liste détecté"
-                        
-                        # Règle 2: Écart vertical important
+                            reason = f"Écart vertical large ({vertical_gap:.1f})"
+
+                        # Règle 2: Titres et Listes (priorité haute)
                         if not force_break:
-                            line_height = line['bbox'][3] - line['bbox'][1] or 10
-                            vertical_gap = next_line['bbox'][1] - line['bbox'][3]
-                            if vertical_gap > line_height * 0.4:
+                            current_text = "".join(s.text for s in line['spans']).strip()
+                            is_title = current_text.isupper() and all(s.font.is_bold for s in line['spans'])
+                            is_next_line_reg = not next_line['spans'][0].font.is_bold
+
+                            if is_title and is_next_line_reg:
                                 force_break = True
-                                reason = f"Écart vertical large ({vertical_gap:.1f} > {line_height * 0.4:.1f})"
-                        
-                        # Règle 3: Combinaison de ponctuation finale + majuscule
+                                reason = "Rupture de style Titre -> Paragraphe"
+                            elif next_line_text.startswith(('•', '-', '–')) or re.match(r'^\s*\d+\.\s', next_line_text):
+                                force_break = True
+                                reason = "Nouvel item de liste explicite"
+
+                        # Règle 3: Ponctuation finale (priorité moyenne)
                         if not force_break:
                             full_line_text = "".join(s.text for s in current_paragraph_spans).strip()
                             if full_line_text.endswith(('.', '!', '?')) and next_line_text and next_line_text[0].isupper():
                                 force_break = True
-                                reason = "Ponctuation finale suivie d'une majuscule"
-                        # --- FIN DES MODIFICATIONS FINALES ---
+                                reason = "Fin de phrase et début de nouvelle phrase capitalisée"
+                        # --- FIN DE LA LOGIQUE HIÉRARCHIQUE ---
                     
                     if is_last_line_of_block or force_break:
                         if current_paragraph_spans:
@@ -225,7 +229,8 @@ class PDFAnalyzer:
                 for para in temp_paragraphs:
                     if para.spans:
                         first_span = para.spans[0]
-                        match = re.match(r'^(\s*[•\-–]\s*|\s*\d+\.?\s*)', first_span.text)
+                        # Utiliser une regex plus large pour capturer les puces/numéros extraits par PyMuPDF
+                        match = re.match(r'^(\s*(?:[•\-–]|\d+)\s*|\s*\d+\.?\s*)', first_span.text)
                         if match:
                             para.is_list_item = True
                             marker_end_pos = match.end()
