@@ -2,7 +2,7 @@
 # -*- coding: utf-8 -*-
 """
 PDF Layout Translator - Analyseur de PDF
-*** VERSION AVEC CORRECTION FINALE DE LA SEGMENTATION ET TRACES ***
+*** VERSION FINALE - LOGIQUE DE SEGMENTATION ET FUSION COHÉRENTES ET ROBUSTES ***
 """
 import logging
 import re
@@ -21,7 +21,6 @@ class PDFAnalyzer:
         return re.sub(r"^[A-Z]{6}\+", "", font_name)
 
     def _get_logical_reading_order(self, blocks: List[TextBlock], page_width: float) -> List[TextBlock]:
-        # (Cette méthode reste inchangée)
         if not blocks:
             return []
 
@@ -83,7 +82,6 @@ class PDFAnalyzer:
         return sorted_blocks
 
     def _should_merge(self, block_a: TextBlock, block_b: TextBlock) -> Tuple[bool, str]:
-        # (Cette méthode reste inchangée avec notre version équilibrée)
         if not all([
             block_a.paragraphs, block_a.paragraphs[-1].spans,
             block_b.paragraphs, block_b.paragraphs[0].spans
@@ -114,7 +112,6 @@ class PDFAnalyzer:
         return True, "Règles de fusion équilibrées respectées"
 
     def _unify_text_blocks(self, blocks: List[TextBlock]) -> List[TextBlock]:
-        # (Cette méthode reste inchangée)
         if not blocks: return []
 
         self.debug_logger.info("    > Démarrage de la phase d'unification des blocs...")
@@ -140,7 +137,7 @@ class PDFAnalyzer:
         return unified_blocks
 
     def analyze_pdf(self, pdf_path: Path) -> List[PageObject]:
-        self.logger.info(f"Début de l'analyse architecturale (avec correction regex et traces) de {pdf_path}")
+        self.logger.info(f"Début de l'analyse architecturale (logique de fusion et segmentation cohérentes) de {pdf_path}")
         doc = fitz.open(pdf_path)
         pages = []
 
@@ -154,8 +151,6 @@ class PDFAnalyzer:
             for block_data in [b for b in blocks_data if b['type'] == 0]:
                 block_counter += 1
                 block_id = f"P{page_num+1}_B{block_counter}"
-                self.debug_logger.info(f"  Traitement du bloc brut ID: {block_id}") # --- TRACE ---
-                
                 text_block = TextBlock(id=block_id, bbox=block_data['bbox'])
                 
                 lines = {}
@@ -182,9 +177,6 @@ class PDFAnalyzer:
                 temp_paragraphs = [] 
                 for i, line in enumerate(sorted_lines):
                     if not line['spans']: continue
-
-                    line_text_for_log = "".join(s.text for s in line['spans']).strip()
-                    self.debug_logger.info(f"    * Ligne {i+1}/{len(sorted_lines)} en cours d'analyse: '{line_text_for_log[:80]}'") # --- TRACE ---
                     
                     current_paragraph_spans.extend(line['spans'])
                     is_last_line_of_block = (i == len(sorted_lines) - 1)
@@ -195,42 +187,38 @@ class PDFAnalyzer:
                         next_line = sorted_lines[i+1]
                         if not next_line['spans']: continue
                         
-                        next_line_text_for_log = next_line['spans'][0].text.strip()
-                        self.debug_logger.info(f"      -> Comparaison avec ligne suivante qui commence par: '{next_line_text_for_log[:30]}...'") # --- TRACE ---
-
-                        next_starts_with_bullet = next_line_text_for_log.startswith(('•', '-', '–'))
+                        # --- DÉBUT DES MODIFICATIONS FINALES ---
+                        next_line_text = next_line['spans'][0].text.strip()
                         
-                        # --- MODIFICATION FINALE ---
-                        # Règle stricte : un ou plusieurs chiffres, suivis d'un point, suivi d'un espace.
-                        next_starts_with_number = re.match(r'^\s*\d+\.\s', next_line_text_for_log)
+                        # Règle 1: Détection de puces et de listes numériques STRICTES
+                        starts_with_bullet = next_line_text.startswith(('•', '-', '–'))
+                        starts_with_number = re.match(r'^\s*\d+\.\s', next_line_text) # Exige un point ET un espace
                         
-                        if next_starts_with_bullet or next_starts_with_number:
+                        if starts_with_bullet or starts_with_number:
                             force_break = True
                             reason = "Nouvel item de liste détecté"
-                            self.debug_logger.info(f"        -> DÉCISION: RUPTURE. Raison: {reason}") # --- TRACE ---
-
+                        
+                        # Règle 2: Écart vertical important
                         if not force_break:
-                            line_height = line['bbox'][3] - line['bbox'][1]
-                            if line_height <= 0: line_height = 10 
+                            line_height = line['bbox'][3] - line['bbox'][1] or 10
                             vertical_gap = next_line['bbox'][1] - line['bbox'][3]
                             if vertical_gap > line_height * 0.4:
                                 force_break = True
                                 reason = f"Écart vertical large ({vertical_gap:.1f} > {line_height * 0.4:.1f})"
-                                self.debug_logger.info(f"        -> DÉCISION: RUPTURE. Raison: {reason}") # --- TRACE ---
-
+                        
+                        # Règle 3: Combinaison de ponctuation finale + majuscule
                         if not force_break:
-                            full_line_text = "".join(s.text for s in line['spans']).strip()
-                            if full_line_text.endswith(('.', '!', '?', ':')):
+                            full_line_text = "".join(s.text for s in current_paragraph_spans).strip()
+                            if full_line_text.endswith(('.', '!', '?')) and next_line_text and next_line_text[0].isupper():
                                 force_break = True
-                                reason = "Ponctuation de fin de ligne"
-                                self.debug_logger.info(f"        -> DÉCISION: RUPTURE. Raison: {reason}") # --- TRACE ---
+                                reason = "Ponctuation finale suivie d'une majuscule"
+                        # --- FIN DES MODIFICATIONS FINALES ---
                     
                     if is_last_line_of_block or force_break:
                         if current_paragraph_spans:
                             para_id = f"{block_id}_P{para_counter}"
                             paragraph = Paragraph(id=para_id, spans=list(current_paragraph_spans))
                             temp_paragraphs.append(paragraph)
-                            self.debug_logger.info(f"    -> Paragraphe '{para_id}' finalisé.") # --- TRACE ---
                             para_counter += 1
                             current_paragraph_spans.clear()
                 
