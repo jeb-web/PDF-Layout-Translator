@@ -2,7 +2,7 @@
 # -*- coding: utf-8 -*-
 """
 PDF Layout Translator - Analyseur de PDF
-*** VERSION AVEC LOGIQUE DE SEGMENTATION HIÉRARCHIQUE FINALE ***
+*** VERSION AVEC LOGIQUE DE SEGMENTATION HIÉRARCHIQUE CORRIGÉE ***
 """
 import logging
 import re
@@ -137,7 +137,7 @@ class PDFAnalyzer:
         return unified_blocks
 
     def analyze_pdf(self, pdf_path: Path) -> List[PageObject]:
-        self.logger.info(f"Début de l'analyse architecturale (logique hiérarchique) de {pdf_path}")
+        self.logger.info(f"Début de l'analyse architecturale (logique hiérarchique corrigée) de {pdf_path}")
         doc = fitz.open(pdf_path)
         pages = []
 
@@ -187,9 +187,10 @@ class PDFAnalyzer:
                         next_line = sorted_lines[i+1]
                         if not next_line['spans']: continue
                         
-                        # --- DÉBUT DE LA LOGIQUE HIÉRARCHIQUE CORRIGÉE ---
                         next_line_text = next_line['spans'][0].text.strip()
                         
+                        # --- DÉBUT DE LA LOGIQUE HIÉRARCHIQUE CORRIGÉE ---
+
                         # Règle 1: Écart vertical (priorité haute)
                         line_height = line['bbox'][3] - line['bbox'][1] or 10
                         vertical_gap = next_line['bbox'][1] - line['bbox'][3]
@@ -197,25 +198,29 @@ class PDFAnalyzer:
                             force_break = True
                             reason = f"Écart vertical large ({vertical_gap:.1f})"
 
-                        # Règle 2: Titres et Listes (priorité haute)
+                        # Règle 2: Détection de Titre (priorité haute) - RÉTABLIE
                         if not force_break:
                             current_text = "".join(s.text for s in line['spans']).strip()
+                            # Un titre est souvent en majuscules et en gras.
                             is_title = current_text.isupper() and all(s.font.is_bold for s in line['spans'])
-                            is_next_line_reg = not next_line['spans'][0].font.is_bold
-
-                            if is_title and is_next_line_reg:
+                            
+                            if is_title:
                                 force_break = True
-                                reason = "Rupture de style Titre -> Paragraphe"
-                            elif next_line_text.startswith(('•', '-', '–')) or re.match(r'^\s*\d+\.\s', next_line_text):
+                                reason = "Titre détecté (MAJUSCULES et Gras)"
+
+                        # Règle 3: Détection d'item de liste (priorité haute) - RÉTABLIE
+                        if not force_break:
+                            if next_line_text.startswith(('•', '-', '–')) or re.match(r'^\s*\d+\.\s', next_line_text):
                                 force_break = True
                                 reason = "Nouvel item de liste explicite"
 
-                        # Règle 3: Ponctuation finale (priorité moyenne)
+                        # Règle 4: Ponctuation finale (priorité moyenne)
                         if not force_break:
                             full_line_text = "".join(s.text for s in current_paragraph_spans).strip()
-                            if full_line_text.endswith(('.', '!', '?')) and next_line_text and next_line_text[0].isupper():
+                            if full_line_text.endswith(('.', '!', '?')):
                                 force_break = True
-                                reason = "Fin de phrase et début de nouvelle phrase capitalisée"
+                                reason = "Ponctuation de fin de ligne"
+                        
                         # --- FIN DE LA LOGIQUE HIÉRARCHIQUE ---
                     
                     if is_last_line_of_block or force_break:
@@ -229,8 +234,7 @@ class PDFAnalyzer:
                 for para in temp_paragraphs:
                     if para.spans:
                         first_span = para.spans[0]
-                        # Utiliser une regex plus large pour capturer les puces/numéros extraits par PyMuPDF
-                        match = re.match(r'^(\s*(?:[•\-–]|\d+)\s*|\s*\d+\.?\s*)', first_span.text)
+                        match = re.match(r'^(\s*[•\-–]\s*|\s*\d+\.?\s*)', first_span.text)
                         if match:
                             para.is_list_item = True
                             marker_end_pos = match.end()
