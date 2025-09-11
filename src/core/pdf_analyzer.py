@@ -276,3 +276,70 @@ class PDFAnalyzer:
             pages.append(page_obj)
         doc.close()
         return pages
+
+    # =================================================================================
+    # NOUVELLE MÉTHODE POUR LE FLUX IA
+    # =================================================================================
+    def analyze_pdf_raw_blocks(self, pdf_path: Path) -> List[PageObject]:
+        """
+        Analyse un PDF et extrait les blocs de texte bruts sans appliquer de logique
+        de tri ou de fusion sémantique. Chaque bloc retourné est riche en informations
+        de style et de positionnement. C'est la source de données idéale pour une IA externe.
+        """
+        self.logger.info(f"Début de l'analyse architecturale BRUTE de {pdf_path}")
+        doc = fitz.open(pdf_path)
+        pages = []
+
+        for page_num, page in enumerate(doc):
+            page_dimensions = (page.rect.width, page.rect.height)
+            page_obj = PageObject(page_number=page_num + 1, dimensions=page_dimensions)
+            blocks_data = page.get_text("dict", flags=fitz.TEXTFLAGS_DICT)["blocks"]
+            
+            raw_text_blocks = []
+            block_counter = 0
+            for block_data in [b for b in blocks_data if b['type'] == 0]:
+                block_counter += 1
+                block_id = f"P{page_num+1}_B{block_counter}"
+                text_block = TextBlock(id=block_id, bbox=block_data['bbox'])
+                
+                lines = {}
+                span_counter = 0
+                for line_data in block_data.get('lines', []):
+                    line_key = round(line_data['bbox'][1], 1)
+                    if line_key not in lines: lines[line_key] = {'spans': [], 'bbox': line_data['bbox']}
+                    for span_data in sorted(line_data.get('spans', []), key=lambda s: s['bbox'][0]):
+                        span_counter += 1
+                        span_id = f"{block_id}_S{span_counter}"
+                        font_name = self._normalize_font_name(span_data['font'])
+                        font_info = FontInfo(name=font_name, size=span_data['size'], color=f"#{span_data['color']:06x}", is_bold="bold" in font_name.lower() or "black" in font_name.lower(), is_italic="italic" in font_name.lower())
+                        span_text = span_data['text'].replace('\t', '    ')
+                        if lines[line_key]['spans'] and not lines[line_key]['spans'][-1].text.endswith(' '):
+                           if span_data['bbox'][0] > (lines[line_key]['spans'][-1].bbox[2] + 0.5):
+                                lines[line_key]['spans'][-1].text += " "
+                        new_span = TextSpan(id=span_id, text=span_text, font=font_info, bbox=span_data['bbox'])
+                        lines[line_key]['spans'].append(new_span)
+                
+                if not lines: continue
+                
+                # Dans ce mode brut, nous considérons chaque ligne comme un paragraphe distinct
+                # pour donner un maximum de granularité à l'IA.
+                temp_paragraphs = []
+                para_counter = 1
+                for line_key in sorted(lines.keys()):
+                    line_spans = lines[line_key]['spans']
+                    if line_spans:
+                        para_id = f"{block_id}_P{para_counter}"
+                        paragraph = Paragraph(id=para_id, spans=list(line_spans))
+                        temp_paragraphs.append(paragraph)
+                        para_counter += 1
+                
+                text_block.paragraphs = temp_paragraphs
+                if text_block.paragraphs:
+                    raw_text_blocks.append(text_block)
+
+            # Nous assignons directement les blocs bruts, sans tri sémantique ni fusion.
+            page_obj.text_blocks = raw_text_blocks
+            pages.append(page_obj)
+            
+        doc.close()
+        return pages
