@@ -7,7 +7,7 @@ PDF Layout Translator - Analyseur de PDF
 import logging
 import re
 from pathlib import Path
-from typing import List, Tuple
+from typing import List, Tuple, Dict, Any
 import fitz
 import copy
 from core.data_model import PageObject, TextBlock, TextSpan, FontInfo, Paragraph
@@ -135,6 +135,74 @@ class PDFAnalyzer:
         unified_blocks.append(current_block)
         self.debug_logger.info(f"    > Unification terminée. Nombre de blocs: {len(blocks)} -> {len(unified_blocks)}")
         return unified_blocks
+
+    def apply_grouping_instructions(self, raw_pages: List[PageObject], instructions: Dict[str, Any]) -> List[PageObject]:
+        """
+        Applique les instructions de regroupement de l'IA pour fusionner les TextBlocks.
+        C'est le constructeur déterministe du "fichier 1".
+        """
+        self.debug_logger.info("--- Application des instructions de regroupement sémantique de l'IA ---")
+        
+        # Créer un dictionnaire de tous les blocs par ID pour un accès rapide
+        all_blocks_map: Dict[str, TextBlock] = {
+            block.id: block for page in raw_pages for block in page.text_blocks
+        }
+        
+        # Garder une trace des IDs de blocs qui ont été fusionnés dans un autre
+        merged_block_ids = set()
+
+        grouping_list = instructions.get("grouping_instructions", [])
+        for group in grouping_list:
+            ids_to_merge = group.get("ids_to_merge", [])
+            if not ids_to_merge or len(ids_to_merge) < 2:
+                continue
+
+            # Le premier bloc du groupe est le bloc principal qui absorbera les autres
+            primary_block_id = ids_to_merge[0]
+            if primary_block_id not in all_blocks_map:
+                self.debug_logger.warning(f"ID de bloc principal non trouvé : {primary_block_id}")
+                continue
+                
+            primary_block = all_blocks_map[primary_block_id]
+            self.debug_logger.info(f"  > Fusion dans le bloc {primary_block_id}. Raison: {group.get('reason', 'N/A')}")
+
+            # Itérer sur les blocs restants à fusionner
+            for block_id_to_merge in ids_to_merge[1:]:
+                if block_id_to_merge not in all_blocks_map:
+                    self.debug_logger.warning(f"ID de bloc à fusionner non trouvé : {block_id_to_merge}")
+                    continue
+
+                block_to_merge = all_blocks_map[block_id_to_merge]
+                
+                # 1. Fusionner les paragraphes/spans
+                primary_block.paragraphs.extend(block_to_merge.paragraphs)
+                
+                # 2. Étendre la Bounding Box (bbox)
+                px0, py0, px2, py2 = primary_block.bbox
+                mx0, my0, mx2, my2 = block_to_merge.bbox
+                primary_block.bbox = (min(px0, mx0), min(py0, my0), max(px2, mx2), max(py2, my2))
+                
+                # 3. Marquer le bloc comme fusionné pour le supprimer plus tard
+                merged_block_ids.add(block_id_to_merge)
+                self.debug_logger.info(f"    - Bloc {block_id_to_merge} fusionné.")
+
+        # Construire les nouvelles pages avec les blocs sémantiques
+        semantically_grouped_pages: List[PageObject] = []
+        for raw_page in raw_pages:
+            # Créer une copie profonde pour ne pas altérer l'original
+            grouped_page = PageObject(page_number=raw_page.page_number, dimensions=raw_page.dimensions)
+            
+            # Ne garder que les blocs qui n'ont pas été fusionnés dans un autre
+            grouped_page.text_blocks = [
+                copy.deepcopy(block) for block in raw_page.text_blocks if block.id not in merged_block_ids
+            ]
+            
+            # Appliquer l'ordre de lecture final (haut-en-bas)
+            grouped_page.text_blocks.sort(key=lambda b: b.bbox[1])
+            semantically_grouped_pages.append(grouped_page)
+
+        self.debug_logger.info("--- Fin de l'application des instructions de regroupement. ---")
+        return semantically_grouped_pages
 
     def analyze_pdf(self, pdf_path: Path) -> List[PageObject]:
         self.logger.info(f"Début de l'analyse architecturale (logique hiérarchique simplifiée) de {pdf_path}")
