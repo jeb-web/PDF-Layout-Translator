@@ -2,7 +2,7 @@
 # -*- coding: utf-8 -*-
 """
 PDF Layout Translator - Analyseur de PDF
-*** VERSION AVEC LOGIQUE DE SEGMENTATION HIÉRARCHIQUE SIMPLIFIÉE ***
+*** VERSION AVEC CORRECTION DE LA LOGIQUE DE FUSION SÉMANTIQUE ***
 """
 import logging
 import re
@@ -21,6 +21,7 @@ class PDFAnalyzer:
         return re.sub(r"^[A-Z]{6}\+", "", font_name)
 
     def _get_logical_reading_order(self, blocks: List[TextBlock], page_width: float) -> List[TextBlock]:
+        # ... (cette méthode reste inchangée)
         if not blocks:
             return []
 
@@ -82,6 +83,7 @@ class PDFAnalyzer:
         return sorted_blocks
 
     def _should_merge(self, block_a: TextBlock, block_b: TextBlock) -> Tuple[bool, str]:
+        # ... (cette méthode reste inchangée)
         if not all([
             block_a.paragraphs, block_a.paragraphs[-1].spans,
             block_b.paragraphs, block_b.paragraphs[0].spans
@@ -112,6 +114,7 @@ class PDFAnalyzer:
         return True, "Règles de fusion équilibrées respectées"
 
     def _unify_text_blocks(self, blocks: List[TextBlock]) -> List[TextBlock]:
+        # ... (cette méthode reste inchangée)
         if not blocks: return []
 
         self.debug_logger.info("    > Démarrage de la phase d'unification des blocs...")
@@ -143,12 +146,13 @@ class PDFAnalyzer:
         """
         self.debug_logger.info("--- Application des instructions de regroupement sémantique de l'IA ---")
         
-        # Créer un dictionnaire de tous les blocs par ID pour un accès rapide
+        # Créer une copie profonde pour travailler dessus sans modifier l'original
+        working_pages = copy.deepcopy(raw_pages)
+
         all_blocks_map: Dict[str, TextBlock] = {
-            block.id: block for page in raw_pages for block in page.text_blocks
+            block.id: block for page in working_pages for block in page.text_blocks
         }
         
-        # Garder une trace des IDs de blocs qui ont été fusionnés dans un autre
         merged_block_ids = set()
 
         grouping_list = instructions.get("grouping_instructions", [])
@@ -157,7 +161,6 @@ class PDFAnalyzer:
             if not ids_to_merge or len(ids_to_merge) < 2:
                 continue
 
-            # Le premier bloc du groupe est le bloc principal qui absorbera les autres
             primary_block_id = ids_to_merge[0]
             if primary_block_id not in all_blocks_map:
                 self.debug_logger.warning(f"ID de bloc principal non trouvé : {primary_block_id}")
@@ -166,7 +169,6 @@ class PDFAnalyzer:
             primary_block = all_blocks_map[primary_block_id]
             self.debug_logger.info(f"  > Fusion dans le bloc {primary_block_id}. Raison: {group.get('reason', 'N/A')}")
 
-            # Itérer sur les blocs restants à fusionner
             for block_id_to_merge in ids_to_merge[1:]:
                 if block_id_to_merge not in all_blocks_map:
                     self.debug_logger.warning(f"ID de bloc à fusionner non trouvé : {block_id_to_merge}")
@@ -174,30 +176,31 @@ class PDFAnalyzer:
 
                 block_to_merge = all_blocks_map[block_id_to_merge]
                 
-                # 1. Fusionner les paragraphes/spans
-                primary_block.paragraphs.extend(block_to_merge.paragraphs)
+                # --- CORRECTION CRUCIALE ---
+                # Au lieu d'ajouter des objets Paragraph, on fusionne leur contenu (spans).
+                if primary_block.paragraphs and block_to_merge.paragraphs:
+                    last_para_in_primary = primary_block.paragraphs[-1]
+                    for para_to_merge in block_to_merge.paragraphs:
+                        last_para_in_primary.spans.extend(para_to_merge.spans)
+                elif block_to_merge.paragraphs:
+                    primary_block.paragraphs.extend(block_to_merge.paragraphs)
+                # --- FIN DE LA CORRECTION ---
                 
-                # 2. Étendre la Bounding Box (bbox)
                 px0, py0, px2, py2 = primary_block.bbox
                 mx0, my0, mx2, my2 = block_to_merge.bbox
                 primary_block.bbox = (min(px0, mx0), min(py0, my0), max(px2, mx2), max(py2, my2))
                 
-                # 3. Marquer le bloc comme fusionné pour le supprimer plus tard
                 merged_block_ids.add(block_id_to_merge)
                 self.debug_logger.info(f"    - Bloc {block_id_to_merge} fusionné.")
 
-        # Construire les nouvelles pages avec les blocs sémantiques
         semantically_grouped_pages: List[PageObject] = []
-        for raw_page in raw_pages:
-            # Créer une copie profonde pour ne pas altérer l'original
-            grouped_page = PageObject(page_number=raw_page.page_number, dimensions=raw_page.dimensions)
+        for page in working_pages:
+            grouped_page = PageObject(page_number=page.page_number, dimensions=page.dimensions)
             
-            # Ne garder que les blocs qui n'ont pas été fusionnés dans un autre
             grouped_page.text_blocks = [
-                copy.deepcopy(block) for block in raw_page.text_blocks if block.id not in merged_block_ids
+                block for block in page.text_blocks if block.id not in merged_block_ids
             ]
             
-            # Appliquer l'ordre de lecture final (haut-en-bas)
             grouped_page.text_blocks.sort(key=lambda b: b.bbox[1])
             semantically_grouped_pages.append(grouped_page)
 
@@ -205,6 +208,7 @@ class PDFAnalyzer:
         return semantically_grouped_pages
 
     def analyze_pdf(self, pdf_path: Path) -> List[PageObject]:
+        # ... (cette méthode reste inchangée)
         self.logger.info(f"Début de l'analyse architecturale (logique hiérarchique simplifiée) de {pdf_path}")
         doc = fitz.open(pdf_path)
         pages = []
@@ -339,11 +343,7 @@ class PDFAnalyzer:
         return pages
 
     def analyze_pdf_raw_blocks(self, pdf_path: Path) -> List[PageObject]:
-        """
-        Analyse un PDF et extrait les blocs de texte bruts sans appliquer de logique
-        de tri ou de fusion sémantique. Chaque bloc retourné est riche en informations
-        de style et de positionnement. C'est la source de données idéale pour une IA externe.
-        """
+        # ... (cette méthode reste inchangée)
         self.logger.info(f"Début de l'analyse architecturale BRUTE de {pdf_path}")
         doc = fitz.open(pdf_path)
         pages = []
@@ -379,8 +379,6 @@ class PDFAnalyzer:
                 
                 if not lines: continue
                 
-                # Dans ce mode brut, nous considérons chaque ligne comme un paragraphe distinct
-                # pour donner un maximum de granularité à l'IA.
                 temp_paragraphs = []
                 para_counter = 1
                 for line_key in sorted(lines.keys()):
@@ -395,7 +393,6 @@ class PDFAnalyzer:
                 if text_block.paragraphs:
                     raw_text_blocks.append(text_block)
 
-            # Nous assignons directement les blocs bruts, sans tri sémantique ni fusion.
             page_obj.text_blocks = raw_text_blocks
             pages.append(page_obj)
             
