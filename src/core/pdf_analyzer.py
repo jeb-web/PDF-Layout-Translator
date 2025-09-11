@@ -189,16 +189,12 @@ class PDFAnalyzer:
                         
                         next_line_text = next_line['spans'][0].text.strip()
                         
-                        # --- DÉBUT DE LA LOGIQUE HIÉRARCHIQUE FINALE ---
-
-                        # Règle 1: Écart vertical (priorité haute)
                         line_height = line['bbox'][3] - line['bbox'][1] or 10
                         vertical_gap = next_line['bbox'][1] - line['bbox'][3]
                         if vertical_gap > line_height * 0.4:
                             force_break = True
                             reason = f"Écart vertical large ({vertical_gap:.1f})"
 
-                        # Règle 2: Détection de Titre (priorité haute)
                         if not force_break:
                             current_text = "".join(s.text for s in line['spans']).strip()
                             is_title_style = current_text.isupper() and all(s.font.is_bold for s in line['spans'])
@@ -208,13 +204,10 @@ class PDFAnalyzer:
                                 force_break = True
                                 reason = "Titre détecté (MAJUSCULES/Gras -> Normal)"
 
-                        # Règle 3: Détection d'item de liste (priorité haute)
                         if not force_break:
                             if next_line_text.startswith(('•', '-', '–')) or re.match(r'^\s*\d+\.\s', next_line_text):
                                 force_break = True
                                 reason = "Nouvel item de liste explicite"
-                        
-                        # --- FIN DE LA LOGIQUE HIÉRARCHIQUE ---
                     
                     if is_last_line_of_block or force_break:
                         if current_paragraph_spans:
@@ -277,9 +270,6 @@ class PDFAnalyzer:
         doc.close()
         return pages
 
-    # =================================================================================
-    # NOUVELLE MÉTHODE POUR LE FLUX IA
-    # =================================================================================
     def analyze_pdf_raw_blocks(self, pdf_path: Path) -> List[PageObject]:
         """
         Analyse un PDF et extrait les blocs de texte bruts sans appliquer de logique
