@@ -2,7 +2,7 @@
 # -*- coding: utf-8 -*-
 """
 PDF Layout Translator - Fenêtre principale
-*** VERSION v2.6.2 - Correction du flux IA et de la gestion des onglets ***
+*** VERSION v2.7.0 - Refactoring du flux IA pour la robustesse ***
 """
 
 import tkinter as tk
@@ -28,6 +28,50 @@ from core.pdf_reconstructor import PDFReconstructor
 from core.data_model import PageObject, TextBlock, TextSpan, FontInfo, Paragraph
 from gui.font_dialog import FontDialog
 
+# NOUVEAU : Le prompt de l'IA est maintenant géré par le programme
+AI_GROUPING_PROMPT = """Votre Rôle :
+Vous êtes un expert en analyse de la structure sémantique de documents. Votre unique mission est d'analyser une structure de blocs de texte bruts issue d'un PDF, décrite en JSON, et de déterminer quels blocs doivent être fusionnés pour former des unités logiques (paragraphes, titres, etc.).
+
+[CONTEXTE]
+Je vais vous fournir un JSON représentant les blocs de texte bruts d'un document (`text_blocks`). Chaque bloc possède un `id` unique, des coordonnées `bbox` ([x0, y0, x2, y2]), et du contenu textuel.
+
+[MISSION]
+En analysant la disposition spatiale (`bbox`), le style et le contenu des blocs, identifiez les groupes de blocs qui doivent être fusionnés.
+
+Pensez aux règles suivantes pour guider votre décision :
+- Proximité Verticale : Des blocs très proches verticalement font probablement partie du même paragraphe. Un grand espace vertical suggère une séparation.
+- Continuité Logique : Une phrase qui se termine dans un bloc et continue dans le suivant est un candidat évident à la fusion.
+- Éléments Distincts : Les titres, les puces de listes, ou les blocs avec un style très différent doivent généralement rester séparés et initier un nouveau groupe.
+
+[FORMAT DE SORTIE]
+Votre réponse doit être un unique bloc de code JSON. Ce JSON doit contenir une seule clé de haut niveau : `grouping_instructions`.
+
+La valeur de `grouping_instructions` est une liste. Chaque élément de cette liste est un objet représentant un groupe de blocs à fusionner, avec deux clés :
+1.  `ids_to_merge`: Une liste de chaînes de caractères contenant les `id` des blocs à fusionner, dans l'ordre de lecture.
+2.  `reason`: Une courte phrase en anglais expliquant pourquoi vous avez décidé de les fusionner (ex: "Continuous paragraph flow", "Title block", "List item").
+
+Si un bloc ne doit être fusionné avec aucun autre, ne l'incluez simplement dans aucune liste `ids_to_merge`.
+
+Exemple de sortie attendue :
+```json
+{
+  "grouping_instructions": [
+    {
+      "ids_to_merge": ["P1_B2", "P1_B3", "P1_B4"],
+      "reason": "These blocks form a single continuous paragraph."
+    },
+    {
+      "ids_to_merge": ["P1_B6", "P1_B7"],
+      "reason": "Continuation of a sentence across two blocks."
+    }
+  ]
+}
+```
+
+[DONNÉES D'ENTRÉE]
+Voici le JSON brut (fichier 0) à traiter :
+"""
+
 class MainWindow:
     def __init__(self, root: tk.Tk, config_manager):
         self.root = root
@@ -46,6 +90,7 @@ class MainWindow:
         
         self.current_session_id = None
         self.processing = False
+        self.raw_page_objects: List[PageObject] = [] # Pour stocker les données brutes
         
         self.use_ai_flow_var = tk.BooleanVar(value=False)
         
@@ -54,7 +99,7 @@ class MainWindow:
         self._initialize_managers()
         
     def _setup_window(self):
-        self.root.title("PDF Layout Translator v2.6.2")
+        self.root.title("PDF Layout Translator v2.7.0")
         self.root.geometry("1200x800")
         self.root.minsize(900, 700)
         style = ttk.Style()
@@ -86,8 +131,8 @@ class MainWindow:
         
         self._create_home_tab()
         self._create_analysis_tab()
-        self._create_translation_tab()
         self._create_ai_interaction_tab()
+        self._create_translation_tab()
         self._create_layout_tab()
         self._create_export_tab()
         
@@ -123,11 +168,12 @@ class MainWindow:
         
         ai_flow_checkbox = ttk.Checkbutton(
             new_project_frame,
-            text="Utiliser l'IA Gemini pour le regroupement et la traduction (mode manuel)",
+            text="Utiliser une IA pour le regroupement sémantique (mode avancé)",
             variable=self.use_ai_flow_var
         )
         ai_flow_checkbox.pack(pady=(15, 0), anchor='w')
-        ToolTip(ai_flow_checkbox, "Cochez cette case pour générer un JSON brut à analyser manuellement avec une IA.")
+        ToolTip(ai_flow_checkbox, "Cochez cette case pour utiliser une IA externe (ex: Gemini, ChatGPT)\n"
+                                "afin de déterminer comment regrouper les blocs de texte.")
 
         self.start_button = ttk.Button(new_project_frame, text="Démarrer l'analyse", command=self._start_new_project)
         self.start_button.pack(pady=(20, 0))
@@ -146,21 +192,44 @@ class MainWindow:
         self.ai_frame = ttk.Frame(self.notebook)
         self.notebook.insert(2, self.ai_frame, text="🤖 Interaction IA")
 
-        input_frame = ttk.LabelFrame(self.ai_frame, text="Étape 1 : Données brutes à envoyer à Gemini", padding=10)
-        input_frame.pack(fill='both', expand=True, padx=10, pady=10)
-        ttk.Label(input_frame, text="Copiez le contenu JSON ci-dessous et utilisez-le dans votre prompt Gemini pour le regroupement.", wraplength=1000).pack(anchor='w', pady=5)
+        main_paned = ttk.PanedWindow(self.ai_frame, orient=tk.VERTICAL)
+        main_paned.pack(fill='both', expand=True, padx=10, pady=10)
+
+        # Frame du haut : Prompt + Données
+        top_frame = ttk.Frame(main_paned)
+        main_paned.add(top_frame, weight=3)
+        
+        prompt_frame = ttk.LabelFrame(top_frame, text="Étape 1 : Prompt à utiliser avec les données", padding=10)
+        prompt_frame.pack(fill='both', expand=True, pady=(0, 10))
+        self.ai_prompt_text = scrolledtext.ScrolledText(prompt_frame, height=8, wrap='word', relief='flat', background=self.root.cget('bg'))
+        self.ai_prompt_text.insert('1.0', AI_GROUPING_PROMPT)
+        self.ai_prompt_text.config(state='disabled')
+        self.ai_prompt_text.pack(fill='both', expand=True)
+        ttk.Button(prompt_frame, text="Copier le Prompt", command=self._copy_prompt_to_clipboard).pack(pady=(5,0))
+
+        input_frame = ttk.LabelFrame(top_frame, text="Étape 2 : Données brutes (Fichier 0) à joindre au prompt", padding=10)
+        input_frame.pack(fill='both', expand=True)
         self.ai_input_text = scrolledtext.ScrolledText(input_frame, height=10, wrap='word')
         self.ai_input_text.pack(fill='both', expand=True)
 
-        output_frame = ttk.LabelFrame(self.ai_frame, text="Étape 2 : Collez le résultat JSON complet de Gemini ici", padding=10)
-        output_frame.pack(fill='both', expand=True, padx=10, pady=10)
+        # Frame du bas : Réponse de l'IA
+        bottom_frame = ttk.Frame(main_paned)
+        main_paned.add(bottom_frame, weight=2)
+        
+        output_frame = ttk.LabelFrame(bottom_frame, text="Étape 3 : Collez ici les instructions de regroupement (JSON) de l'IA", padding=10)
+        output_frame.pack(fill='both', expand=True)
         self.ai_output_text = scrolledtext.ScrolledText(output_frame, height=10, wrap='word')
         self.ai_output_text.pack(fill='both', expand=True)
         
-        process_button = ttk.Button(self.ai_frame, text="Traiter le résultat de Gemini et générer les fichiers", command=self._process_gemini_output)
-        process_button.pack(pady=10)
+        process_button = ttk.Button(self.ai_frame, text="Traiter les instructions de l'IA et Générer les Fichiers", command=self._process_gemini_output)
+        process_button.pack(pady=10, padx=10)
 
         self.notebook.hide(self.ai_frame)
+    
+    def _copy_prompt_to_clipboard(self):
+        self.root.clipboard_clear()
+        self.root.clipboard_append(AI_GROUPING_PROMPT)
+        self.status_label.config(text="Prompt copié dans le presse-papiers.")
 
     def _create_translation_tab(self):
         self.translation_frame = ttk.Frame(self.notebook)
@@ -267,13 +336,13 @@ class MainWindow:
     def _analyze_pdf(self):
         def thread_target():
             if self.use_ai_flow_var.get():
-                self._set_processing(True, "Analyse brute du PDF en cours...")
+                self._set_processing(True, "Analyse brute du PDF pour l'IA...")
                 try:
                     session_info = self.session_manager.get_session_info(self.current_session_id)
                     pdf_path = Path(session_info.original_pdf_path)
                     
-                    raw_page_objects = self.pdf_analyzer.analyze_pdf_raw_blocks(pdf_path)
-                    raw_data_json = json.dumps([asdict(p) for p in raw_page_objects], indent=2)
+                    self.raw_page_objects = self.pdf_analyzer.analyze_pdf_raw_blocks(pdf_path)
+                    raw_data_json = json.dumps([asdict(p) for p in self.raw_page_objects], indent=2)
                     
                     session_dir = self.session_manager.get_session_directory(self.current_session_id)
                     with open(session_dir / "0_raw_analysis.json", "w", encoding="utf-8") as f:
@@ -316,55 +385,73 @@ class MainWindow:
     def _process_gemini_output(self):
         gemini_output = self.ai_output_text.get('1.0', tk.END).strip()
         if not gemini_output:
-            messagebox.showwarning("Entrée manquante", "Veuillez coller le résultat JSON de Gemini dans le champ prévu.", parent=self.root)
+            messagebox.showwarning("Entrée manquante", "Veuillez coller les instructions JSON de l'IA.", parent=self.root)
             return
 
         def thread_target():
-            self._set_processing(True, "Traitement du résultat de l'IA...")
+            self._set_processing(True, "Application des instructions de l'IA...")
             try:
-                data = json.loads(gemini_output)
-                structured_layout = data['structured_layout']
-                xliff_content = data['xliff_content']
-                styles = data['styles']
+                # Étape 1 : Parser les instructions simples de l'IA
+                instructions = json.loads(gemini_output)
+                
+                if not self.raw_page_objects:
+                    raise RuntimeError("Les données d'analyse brutes (self.raw_page_objects) n'ont pas été trouvées.")
+                
+                # Étape 2 : Le programme construit la structure sémantique ("fichier 1")
+                semantically_grouped_pages = self.pdf_analyzer.apply_grouping_instructions(
+                    self.raw_page_objects, instructions
+                )
                 
                 session_dir = self.session_manager.get_session_directory(self.current_session_id)
-                
-                with open(session_dir / "1_dom_analysis.json", "w", encoding="utf-8") as f:
-                    json.dump(structured_layout, f, indent=2)
-                self.debug_logger.info("Fichier '1_dom_analysis.json' CRÉÉ à partir de la sortie de l'IA.")
+                dom_path = session_dir / "1_dom_analysis.json"
+                with open(dom_path, "w", encoding="utf-8") as f:
+                    json.dump([asdict(p) for p in semantically_grouped_pages], f, indent=2)
+                self.debug_logger.info("Fichier '1_dom_analysis.json' construit par le programme à partir des instructions de l'IA.")
 
-                with open(session_dir / "2_xliff_to_translate.xliff", "w", encoding="utf-8") as f:
-                    f.write(xliff_content)
-                self.debug_logger.info("Fichier '2_xliff_to_translate.xliff' sauvegardé depuis la sortie de l'IA.")
-                
-                with open(session_dir / "styles.json", "w", encoding="utf-8") as f:
-                    json.dump(styles, f, indent=2)
-                self.debug_logger.info("Fichier 'styles.json' sauvegardé depuis la sortie de l'IA.")
-
-                def update_ui_after_processing():
-                    self.notebook.hide(self.ai_frame)
-                    self.notebook.select(self.translation_frame)
-                    self.translation_input.delete('1.0', tk.END)
-                    self.translation_input.insert('1.0', xliff_content)
-                    self.continue_to_layout_button.config(state='disabled')
-                    self.open_export_folder_button.config(state='normal')
-                    messagebox.showinfo("Succès", "La structure sémantique de l'IA a été appliquée. Vous pouvez maintenant traduire.", parent=self.root)
-
-                self.root.after(0, update_ui_after_processing)
+                # Étape 3 : Le reste du workflow est maintenant standard
+                self.root.after(0, self._post_ai_processing, semantically_grouped_pages)
 
             except json.JSONDecodeError:
-                self.logger.error("Erreur de parsing du JSON de Gemini.", exc_info=True)
-                self.root.after(0, lambda: messagebox.showerror("Erreur de Format", "Le texte collé n'est pas un JSON valide. Veuillez vérifier le copier-coller.", parent=self.root))
-            except KeyError as e:
-                self.logger.error(f"Clé manquante dans le JSON de Gemini : {e}", exc_info=True)
-                self.root.after(0, lambda e=e: messagebox.showerror("Erreur de Structure", f"Le JSON de Gemini est valide, mais la clé '{e}' est manquante. Veuillez vérifier votre prompt.", parent=self.root))
+                self.logger.error("Erreur de parsing du JSON d'instructions de l'IA.", exc_info=True)
+                self.root.after(0, lambda: messagebox.showerror("Erreur de Format", "Le texte collé n'est pas un JSON d'instructions valide.", parent=self.root))
             except Exception as e:
-                self.logger.error(f"Erreur lors du traitement de la sortie de Gemini: {e}", exc_info=True)
+                self.logger.error(f"Erreur lors de l'application des instructions de l'IA: {e}", exc_info=True)
                 self.root.after(0, lambda e=e: messagebox.showerror("Erreur Inconnue", str(e), parent=self.root))
             finally:
                 self._set_processing(False)
 
         threading.Thread(target=thread_target, daemon=True).start()
+    
+    def _post_ai_processing(self, grouped_pages: List[PageObject]):
+        """
+        Une fois la structure sémantique créée, on enchaîne avec le workflow standard.
+        """
+        self._set_processing(True, "Génération des fichiers de traduction...")
+        try:
+            # On génère le XLIFF et les styles à partir de la structure unifiée
+            extraction_result = self.text_extractor.create_xliff(grouped_pages, self.source_lang_var.get(), self.target_lang_var.get())
+            xliff_content = extraction_result["xliff"]
+            styles = extraction_result["styles"]
+            session_dir = self.session_manager.get_session_directory(self.current_session_id)
+            
+            # Sauvegarder les fichiers
+            with open(session_dir / "2_xliff_to_translate.xliff", "w", encoding="utf-8") as f: f.write(xliff_content)
+            with open(session_dir / "styles.json", "w", encoding="utf-8") as f: json.dump(styles, f, indent=2)
+            self.debug_logger.info("Fichiers XLIFF et styles générés après traitement IA.")
+            
+            # Mettre à jour l'UI pour passer à la traduction
+            self.notebook.hide(self.ai_frame)
+            self.notebook.select(self.translation_frame)
+            self.translation_input.delete('1.0', tk.END)
+            self.translation_input.insert('1.0', xliff_content)
+            self.open_export_folder_button.config(state='normal')
+            messagebox.showinfo("Succès", "La structure sémantique a été appliquée.\nLe fichier XLIFF a été généré et chargé. Vous pouvez maintenant traduire.", parent=self.root)
+
+        except Exception as e:
+            self.logger.error(f"Erreur lors de la post-traitement IA: {e}", exc_info=True)
+            messagebox.showerror("Erreur", f"Erreur lors de la génération des fichiers de traduction : {e}", parent=self.root)
+        finally:
+             self._set_processing(False)
 
     def _post_analysis_step(self, page_objects: List[PageObject]):
         total_blocks = sum(len(p.text_blocks) for p in page_objects)
@@ -616,7 +703,6 @@ class MainWindow:
             pages.append(page_obj)
         self.debug_logger.info(f"--- Fin de _load_dom_from_file (corrigé v2.2) ---")
         return pages
-
 
     def _open_session_folder(self):
         if self.current_session_id:
