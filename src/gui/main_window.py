@@ -2,7 +2,7 @@
 # -*- coding: utf-8 -*-
 """
 PDF Layout Translator - Fenêtre principale
-*** VERSION STABLE v2.5.1-hotfix ***
+*** VERSION v2.6.0 - Intégration du flux IA manuel ***
 """
 
 import tkinter as tk
@@ -47,12 +47,14 @@ class MainWindow:
         self.current_session_id = None
         self.processing = False
         
+        self.use_ai_flow_var = tk.BooleanVar(value=False)
+        
         self._setup_window()
         self._create_widgets()
         self._initialize_managers()
         
     def _setup_window(self):
-        self.root.title("PDF Layout Translator v2.5.1")
+        self.root.title("PDF Layout Translator v2.6.0")
         self.root.geometry("1200x800")
         self.root.minsize(900, 700)
         style = ttk.Style()
@@ -83,6 +85,7 @@ class MainWindow:
         self.notebook.pack(fill='both', expand=True, pady=(10, 0))
         self._create_home_tab()
         self._create_analysis_tab()
+        self._create_ai_interaction_tab() # Nouvel onglet
         self._create_translation_tab()
         self._create_layout_tab()
         self._create_export_tab()
@@ -115,6 +118,16 @@ class MainWindow:
         ttk.Label(lang_frame, text="Langue cible:").pack(side='left', padx=(20, 0))
         self.target_lang_var = tk.StringVar(value="fr")
         ttk.Combobox(lang_frame, textvariable=self.target_lang_var, values=["fr", "en", "es", "de", "it"], width=8).pack(side='left', padx=(10, 0))
+        
+        # --- NOUVELLE CASE À COCHER ---
+        ai_flow_checkbox = ttk.Checkbutton(
+            new_project_frame,
+            text="Utiliser l'IA Gemini pour le regroupement et la traduction (mode manuel)",
+            variable=self.use_ai_flow_var
+        )
+        ai_flow_checkbox.pack(pady=(15, 0), anchor='w')
+        ToolTip(ai_flow_checkbox, "Cochez cette case pour générer un JSON brut à analyser manuellement avec une IA.")
+
         self.start_button = ttk.Button(new_project_frame, text="Démarrer l'analyse", command=self._start_new_project)
         self.start_button.pack(pady=(20, 0))
 
@@ -125,8 +138,37 @@ class MainWindow:
         results_frame.pack(fill='both', expand=True, padx=20, pady=20)
         self.analysis_text = scrolledtext.ScrolledText(results_frame, state='disabled', height=10)
         self.analysis_text.pack(fill='both', expand=True)
-        self.continue_to_translation_button = ttk.Button(self.analysis_frame, text="Continuer vers Traduction", command=lambda: self.notebook.select(2), state='disabled')
+        self.continue_to_translation_button = ttk.Button(self.analysis_frame, text="Continuer vers Traduction", command=lambda: self.notebook.select(3), state='disabled')
         self.continue_to_translation_button.pack(padx=20, pady=10)
+
+    # --- NOUVELLE MÉTHODE POUR L'ONGLET IA ---
+    def _create_ai_interaction_tab(self):
+        self.ai_frame = ttk.Frame(self.notebook)
+        # L'onglet est inséré en position 2, décalant les autres.
+        self.notebook.insert(2, self.ai_frame, text="🤖 Interaction IA")
+
+        # --- Panneau d'entrée ---
+        input_frame = ttk.LabelFrame(self.ai_frame, text="Étape 1 : Données brutes à envoyer à Gemini", padding=10)
+        input_frame.pack(fill='both', expand=True, padx=10, pady=10)
+
+        ttk.Label(input_frame, text="Copiez le contenu JSON ci-dessous et utilisez-le dans votre prompt Gemini pour le regroupement.", wraplength=1000).pack(anchor='w', pady=5)
+        
+        self.ai_input_text = scrolledtext.ScrolledText(input_frame, height=10, wrap='word')
+        self.ai_input_text.pack(fill='both', expand=True)
+
+        # --- Panneau de sortie ---
+        output_frame = ttk.LabelFrame(self.ai_frame, text="Étape 2 : Collez le résultat JSON complet de Gemini ici", padding=10)
+        output_frame.pack(fill='both', expand=True, padx=10, pady=10)
+
+        self.ai_output_text = scrolledtext.ScrolledText(output_frame, height=10, wrap='word')
+        self.ai_output_text.pack(fill='both', expand=True)
+        
+        # --- Bouton de traitement ---
+        process_button = ttk.Button(self.ai_frame, text="Traiter le résultat de Gemini et générer les fichiers", command=self._process_gemini_output)
+        process_button.pack(pady=10)
+
+        # Initialement, on cache cet onglet.
+        self.notebook.hide(2)
 
     def _create_translation_tab(self):
         self.translation_frame = ttk.Frame(self.notebook)
@@ -153,7 +195,7 @@ class MainWindow:
         self.translation_input.pack(fill='both', expand=True)
         self.validate_translation_button = ttk.Button(self.translation_frame, text="Importer et Valider la Traduction", command=self._validate_translation)
         self.validate_translation_button.pack(padx=20, pady=10)
-        self.continue_to_layout_button = ttk.Button(self.translation_frame, text="Continuer vers Mise en Page", command=lambda: self.notebook.select(3), state='disabled')
+        self.continue_to_layout_button = ttk.Button(self.translation_frame, text="Continuer vers Mise en Page", command=lambda: self.notebook.select(4), state='disabled')
         self.continue_to_layout_button.pack(padx=20, pady=10)
 
     def _create_layout_tab(self):
@@ -164,7 +206,7 @@ class MainWindow:
         results_frame.pack(fill='both', expand=True, padx=20, pady=20)
         self.layout_results_text = scrolledtext.ScrolledText(results_frame, state='disabled')
         self.layout_results_text.pack(fill='both', expand=True)
-        self.continue_to_export_button = ttk.Button(self.layout_frame, text="Continuer vers Export", command=lambda: self.notebook.select(4), state='disabled')
+        self.continue_to_export_button = ttk.Button(self.layout_frame, text="Continuer vers Export", command=lambda: self.notebook.select(5), state='disabled')
         self.continue_to_export_button.pack(padx=20, pady=10)
 
     def _create_export_tab(self):
@@ -231,21 +273,103 @@ class MainWindow:
 
     def _analyze_pdf(self):
         def thread_target():
-            self._set_processing(True, "Analyse du PDF en cours...")
+            if self.use_ai_flow_var.get():
+                # --- NOUVEAU FLUX IA MANUEL ---
+                self._set_processing(True, "Analyse brute du PDF en cours...")
+                try:
+                    session_info = self.session_manager.get_session_info(self.current_session_id)
+                    pdf_path = Path(session_info.original_pdf_path)
+                    
+                    raw_page_objects = self.pdf_analyzer.analyze_pdf_raw_blocks(pdf_path)
+                    raw_data_json = json.dumps([asdict(p) for p in raw_page_objects], indent=2)
+                    
+                    def update_ui_for_ai():
+                        self.notebook.show(2)
+                        self.notebook.select(2)
+                        self.ai_input_text.delete('1.0', tk.END)
+                        self.ai_input_text.insert('1.0', raw_data_json)
+                        self.ai_output_text.delete('1.0', tk.END)
+                        messagebox.showinfo("Action requise", "Les données brutes ont été extraites. Allez dans l'onglet 'Interaction IA' pour continuer.", parent=self.root)
+                    
+                    self.root.after(0, update_ui_for_ai)
+
+                except Exception as e:
+                    self.logger.error(f"Erreur d'analyse brute: {e}", exc_info=True)
+                    self.root.after(0, lambda e=e: messagebox.showerror("Erreur d'Analyse Brute", str(e)))
+                finally:
+                    self._set_processing(False)
+            else:
+                # --- FLUX CLASSIQUE (code existant) ---
+                self._set_processing(True, "Analyse du PDF en cours...")
+                try:
+                    session_info = self.session_manager.get_session_info(self.current_session_id)
+                    pdf_path = Path(session_info.original_pdf_path)
+                    page_objects = self.pdf_analyzer.analyze_pdf(pdf_path)
+                    session_dir = self.session_manager.get_session_directory(self.current_session_id)
+                    dom_path = session_dir / "1_dom_analysis.json"
+                    with open(dom_path, "w", encoding="utf-8") as f: json.dump([asdict(p) for p in page_objects], f, indent=2)
+                    self.debug_logger.info("Fichier de débogage '1_dom_analysis.json' sauvegardé.")
+                    self.root.after(0, self._post_analysis_step, page_objects)
+                except Exception as e:
+                    self.logger.error(f"Erreur d'analyse: {e}", exc_info=True)
+                    self.root.after(0, lambda e=e: messagebox.showerror("Erreur d'Analyse", str(e)))
+                finally:
+                    self._set_processing(False)
+
+        threading.Thread(target=thread_target, daemon=True).start()
+
+    # --- NOUVELLE MÉTHODE POUR TRAITER LA SORTIE DE GEMINI ---
+    def _process_gemini_output(self):
+        gemini_output = self.ai_output_text.get('1.0', tk.END).strip()
+        if not gemini_output:
+            messagebox.showwarning("Entrée manquante", "Veuillez coller le résultat JSON de Gemini dans le champ prévu.", parent=self.root)
+            return
+
+        def thread_target():
+            self._set_processing(True, "Traitement du résultat de l'IA...")
             try:
-                session_info = self.session_manager.get_session_info(self.current_session_id)
-                pdf_path = Path(session_info.original_pdf_path)
-                page_objects = self.pdf_analyzer.analyze_pdf(pdf_path)
+                data = json.loads(gemini_output)
+                structured_layout = data['structured_layout']
+                xliff_content = data['xliff_content']
+                styles = data['styles']
+                
                 session_dir = self.session_manager.get_session_directory(self.current_session_id)
-                dom_path = session_dir / "1_dom_analysis.json"
-                with open(dom_path, "w", encoding="utf-8") as f: json.dump([asdict(p) for p in page_objects], f, indent=2)
-                self.debug_logger.info(f"Fichier de débogage '1_dom_analysis.json' sauvegardé.")
-                self.root.after(0, self._post_analysis_step, page_objects)
+                
+                with open(session_dir / "1_dom_analysis.json", "w", encoding="utf-8") as f:
+                    json.dump(structured_layout, f, indent=2)
+                self.debug_logger.info("Fichier '1_dom_analysis.json' sauvegardé depuis la sortie de l'IA.")
+
+                with open(session_dir / "2_xliff_to_translate.xliff", "w", encoding="utf-8") as f:
+                    f.write(xliff_content)
+                self.debug_logger.info("Fichier '2_xliff_to_translate.xliff' sauvegardé depuis la sortie de l'IA.")
+                
+                with open(session_dir / "styles.json", "w", encoding="utf-8") as f:
+                    json.dump(styles, f, indent=2)
+                self.debug_logger.info("Fichier 'styles.json' sauvegardé depuis la sortie de l'IA.")
+
+                def update_ui_after_processing():
+                    self.notebook.hide(2)
+                    self.notebook.select(3)
+                    self.translation_input.delete('1.0', tk.END)
+                    self.translation_input.insert('1.0', xliff_content)
+                    self.continue_to_layout_button.config(state='disabled')
+                    self.open_export_folder_button.config(state='normal')
+                    messagebox.showinfo("Succès", "Les fichiers ont été générés avec succès. Vous pouvez maintenant traduire le contenu.", parent=self.root)
+
+                self.root.after(0, update_ui_after_processing)
+
+            except json.JSONDecodeError:
+                self.logger.error("Erreur de parsing du JSON de Gemini.", exc_info=True)
+                self.root.after(0, lambda: messagebox.showerror("Erreur de Format", "Le texte collé n'est pas un JSON valide. Veuillez vérifier le copier-coller.", parent=self.root))
+            except KeyError as e:
+                self.logger.error(f"Clé manquante dans le JSON de Gemini : {e}", exc_info=True)
+                self.root.after(0, lambda e=e: messagebox.showerror("Erreur de Structure", f"Le JSON de Gemini est valide, mais la clé '{e}' est manquante. Veuillez vérifier votre prompt.", parent=self.root))
             except Exception as e:
-                self.logger.error(f"Erreur d'analyse: {e}", exc_info=True)
-                self.root.after(0, lambda e=e: messagebox.showerror("Erreur d'Analyse", str(e)))
+                self.logger.error(f"Erreur lors du traitement de la sortie de Gemini: {e}", exc_info=True)
+                self.root.after(0, lambda e=e: messagebox.showerror("Erreur Inconnue", str(e), parent=self.root))
             finally:
                 self._set_processing(False)
+
         threading.Thread(target=thread_target, daemon=True).start()
 
     def _post_analysis_step(self, page_objects: List[PageObject]):
@@ -294,13 +418,15 @@ class MainWindow:
             self._set_processing(True, "Traduction automatique en cours...")
             try:
                 session_dir = self.session_manager.get_session_directory(self.current_session_id)
-                page_objects = self._load_dom_from_file(self.current_session_id, "1_dom_analysis.json")
-                extraction_result = self.text_extractor.create_xliff(page_objects, self.source_lang_var.get(), self.target_lang_var.get())
-                xliff_content = extraction_result["xliff"]
-                styles = extraction_result["styles"]
                 
-                with open(session_dir / "2_xliff_to_translate.xliff", "w", encoding="utf-8") as f: f.write(xliff_content)
-                with open(session_dir / "styles.json", "w", encoding="utf-8") as f: json.dump(styles, f, indent=2)
+                # Le XLIFF peut provenir du flux classique ou du flux IA
+                xliff_path = session_dir / "2_xliff_to_translate.xliff"
+                if not xliff_path.exists():
+                    self.root.after(0, lambda: messagebox.showerror("Erreur", "Fichier XLIFF non trouvé. Veuillez d'abord générer les fichiers."))
+                    return
+                
+                with open(xliff_path, "r", encoding="utf-8") as f:
+                    xliff_content = f.read()
 
                 translated_xliff = self.auto_translator.translate_xliff_content(xliff_content, self.target_lang_var.get())
                 with open(session_dir / "3_xliff_translated.xliff", "w", encoding="utf-8") as f: f.write(translated_xliff)
