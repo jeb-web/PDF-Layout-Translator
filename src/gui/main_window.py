@@ -2,7 +2,7 @@
 # -*- coding: utf-8 -*-
 """
 PDF Layout Translator - Fenêtre principale
-*** VERSION v2.6.0 - Intégration du flux IA manuel ***
+*** VERSION v2.6.1 - Correction du flux IA et de la gestion des onglets ***
 """
 
 import tkinter as tk
@@ -54,7 +54,7 @@ class MainWindow:
         self._initialize_managers()
         
     def _setup_window(self):
-        self.root.title("PDF Layout Translator v2.6.0")
+        self.root.title("PDF Layout Translator v2.6.1")
         self.root.geometry("1200x800")
         self.root.minsize(900, 700)
         style = ttk.Style()
@@ -83,12 +83,15 @@ class MainWindow:
         self._create_header(main_frame)
         self.notebook = ttk.Notebook(main_frame)
         self.notebook.pack(fill='both', expand=True, pady=(10, 0))
+        
+        # L'ordre de création est important pour la méthode insert()
         self._create_home_tab()
         self._create_analysis_tab()
-        self._create_ai_interaction_tab() # Nouvel onglet
-        self._create_translation_tab()
+        self._create_translation_tab() # Créé avant l'onglet IA pour que l'index 2 existe
+        self._create_ai_interaction_tab() # Inséré à la bonne position
         self._create_layout_tab()
         self._create_export_tab()
+        
         self._create_status_bar(main_frame)
         self._create_menu()
 
@@ -119,7 +122,6 @@ class MainWindow:
         self.target_lang_var = tk.StringVar(value="fr")
         ttk.Combobox(lang_frame, textvariable=self.target_lang_var, values=["fr", "en", "es", "de", "it"], width=8).pack(side='left', padx=(10, 0))
         
-        # --- NOUVELLE CASE À COCHER ---
         ai_flow_checkbox = ttk.Checkbutton(
             new_project_frame,
             text="Utiliser l'IA Gemini pour le regroupement et la traduction (mode manuel)",
@@ -138,37 +140,30 @@ class MainWindow:
         results_frame.pack(fill='both', expand=True, padx=20, pady=20)
         self.analysis_text = scrolledtext.ScrolledText(results_frame, state='disabled', height=10)
         self.analysis_text.pack(fill='both', expand=True)
-        self.continue_to_translation_button = ttk.Button(self.analysis_frame, text="Continuer vers Traduction", command=lambda: self.notebook.select(3), state='disabled')
+        # CORRECTION: Utilisation de la référence du widget au lieu de l'index
+        self.continue_to_translation_button = ttk.Button(self.analysis_frame, text="Continuer vers Traduction", command=lambda: self.notebook.select(self.translation_frame), state='disabled')
         self.continue_to_translation_button.pack(padx=20, pady=10)
 
-    # --- NOUVELLE MÉTHODE POUR L'ONGLET IA ---
     def _create_ai_interaction_tab(self):
         self.ai_frame = ttk.Frame(self.notebook)
-        # L'onglet est inséré en position 2, décalant les autres.
+        # L'onglet est inséré en position 2, juste avant l'onglet de traduction
         self.notebook.insert(2, self.ai_frame, text="🤖 Interaction IA")
 
-        # --- Panneau d'entrée ---
         input_frame = ttk.LabelFrame(self.ai_frame, text="Étape 1 : Données brutes à envoyer à Gemini", padding=10)
         input_frame.pack(fill='both', expand=True, padx=10, pady=10)
-
         ttk.Label(input_frame, text="Copiez le contenu JSON ci-dessous et utilisez-le dans votre prompt Gemini pour le regroupement.", wraplength=1000).pack(anchor='w', pady=5)
-        
         self.ai_input_text = scrolledtext.ScrolledText(input_frame, height=10, wrap='word')
         self.ai_input_text.pack(fill='both', expand=True)
 
-        # --- Panneau de sortie ---
         output_frame = ttk.LabelFrame(self.ai_frame, text="Étape 2 : Collez le résultat JSON complet de Gemini ici", padding=10)
         output_frame.pack(fill='both', expand=True, padx=10, pady=10)
-
         self.ai_output_text = scrolledtext.ScrolledText(output_frame, height=10, wrap='word')
         self.ai_output_text.pack(fill='both', expand=True)
         
-        # --- Bouton de traitement ---
         process_button = ttk.Button(self.ai_frame, text="Traiter le résultat de Gemini et générer les fichiers", command=self._process_gemini_output)
         process_button.pack(pady=10)
 
-        # Initialement, on cache cet onglet.
-        self.notebook.hide(2)
+        self.notebook.hide(self.ai_frame) # Cacher l'onglet par sa référence
 
     def _create_translation_tab(self):
         self.translation_frame = ttk.Frame(self.notebook)
@@ -195,7 +190,8 @@ class MainWindow:
         self.translation_input.pack(fill='both', expand=True)
         self.validate_translation_button = ttk.Button(self.translation_frame, text="Importer et Valider la Traduction", command=self._validate_translation)
         self.validate_translation_button.pack(padx=20, pady=10)
-        self.continue_to_layout_button = ttk.Button(self.translation_frame, text="Continuer vers Mise en Page", command=lambda: self.notebook.select(4), state='disabled')
+        # CORRECTION: Utilisation de la référence du widget
+        self.continue_to_layout_button = ttk.Button(self.translation_frame, text="Continuer vers Mise en Page", command=lambda: self.notebook.select(self.layout_frame), state='disabled')
         self.continue_to_layout_button.pack(padx=20, pady=10)
 
     def _create_layout_tab(self):
@@ -206,7 +202,8 @@ class MainWindow:
         results_frame.pack(fill='both', expand=True, padx=20, pady=20)
         self.layout_results_text = scrolledtext.ScrolledText(results_frame, state='disabled')
         self.layout_results_text.pack(fill='both', expand=True)
-        self.continue_to_export_button = ttk.Button(self.layout_frame, text="Continuer vers Export", command=lambda: self.notebook.select(5), state='disabled')
+        # CORRECTION: Utilisation de la référence du widget
+        self.continue_to_export_button = ttk.Button(self.layout_frame, text="Continuer vers Export", command=lambda: self.notebook.select(self.export_frame), state='disabled')
         self.continue_to_export_button.pack(padx=20, pady=10)
 
     def _create_export_tab(self):
@@ -265,6 +262,10 @@ class MainWindow:
             self.current_session_id = session_id
             self._setup_debug_logger(session_id)
             self.session_label.config(text=f"Session: {Path(pdf_path).name}")
+            
+            # Cacher l'onglet IA au cas où il serait visible d'une session précédente
+            self.notebook.hide(self.ai_frame)
+
             self.notebook.select(1)
             self._analyze_pdf()
         except Exception as e:
@@ -284,8 +285,8 @@ class MainWindow:
                     raw_data_json = json.dumps([asdict(p) for p in raw_page_objects], indent=2)
                     
                     def update_ui_for_ai():
-                        self.notebook.show(2)
-                        self.notebook.select(2)
+                        self.notebook.add(self.ai_frame) # Rendre l'onglet IA visible
+                        self.notebook.select(self.ai_frame) # Sélectionner l'onglet
                         self.ai_input_text.delete('1.0', tk.END)
                         self.ai_input_text.insert('1.0', raw_data_json)
                         self.ai_output_text.delete('1.0', tk.END)
@@ -318,7 +319,6 @@ class MainWindow:
 
         threading.Thread(target=thread_target, daemon=True).start()
 
-    # --- NOUVELLE MÉTHODE POUR TRAITER LA SORTIE DE GEMINI ---
     def _process_gemini_output(self):
         gemini_output = self.ai_output_text.get('1.0', tk.END).strip()
         if not gemini_output:
@@ -348,8 +348,8 @@ class MainWindow:
                 self.debug_logger.info("Fichier 'styles.json' sauvegardé depuis la sortie de l'IA.")
 
                 def update_ui_after_processing():
-                    self.notebook.hide(2)
-                    self.notebook.select(3)
+                    self.notebook.hide(self.ai_frame)
+                    self.notebook.select(self.translation_frame)
                     self.translation_input.delete('1.0', tk.END)
                     self.translation_input.insert('1.0', xliff_content)
                     self.continue_to_layout_button.config(state='disabled')
@@ -378,16 +378,17 @@ class MainWindow:
         summary = f"Analyse terminée.\n- Pages: {len(page_objects)}\n- Blocs de texte: {total_blocks}\n- Segments de style (spans): {total_spans}"
         self.analysis_text.config(state='normal'); self.analysis_text.delete('1.0', tk.END); self.analysis_text.insert('1.0', summary); self.analysis_text.config(state='disabled')
         
-        required_fonts = {span.font.name for page in page_objects for block in page.text_blocks for span in block.spans}
+        required_fonts = {span.font.name for page in page_objects for block in page.text_blocks for para in block.paragraphs for span in para.spans}
         
         font_report = self.font_manager.check_fonts_availability(list(required_fonts))
         if not font_report['all_available']:
             FontDialog(self.root, self.font_manager, font_report).show()
             
         self.continue_to_translation_button.config(state='normal')
-        self.notebook.select(1)
+        self.notebook.select(self.analysis_frame)
 
     def _generate_translation_export(self):
+        # ... (le reste du fichier est identique à celui que vous avez fourni)
         def thread_target():
             self._set_processing(True, "Génération du fichier XLIFF...")
             try:
@@ -418,11 +419,10 @@ class MainWindow:
             self._set_processing(True, "Traduction automatique en cours...")
             try:
                 session_dir = self.session_manager.get_session_directory(self.current_session_id)
-                
-                # Le XLIFF peut provenir du flux classique ou du flux IA
                 xliff_path = session_dir / "2_xliff_to_translate.xliff"
                 if not xliff_path.exists():
                     self.root.after(0, lambda: messagebox.showerror("Erreur", "Fichier XLIFF non trouvé. Veuillez d'abord générer les fichiers."))
+                    self._set_processing(False)
                     return
                 
                 with open(xliff_path, "r", encoding="utf-8") as f:
